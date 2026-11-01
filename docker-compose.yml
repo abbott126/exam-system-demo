@@ -1,0 +1,19 @@
+# 考试系统 v1.0 正式版 —— Docker Compose 启动
+# 启动：docker compose up -d --build    访问 http://localhost:3000
+# 停止：docker compose down              （数据保留在数据卷 exam-data 中）
+# 重置演示数据：docker compose down -v 后再 up（会删除数据卷）
+services:
+  exam-system:
+    build: .
+    image: exam-system:1.0
+    container_name: exam-system
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=Asia/Shanghai
+    volumes:
+      - exam-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  exam-data:
