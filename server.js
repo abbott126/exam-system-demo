@@ -17,7 +17,31 @@ const DB_PATH = path.join(ROOT, 'data', 'db.json');
 const PUBLIC = path.join(ROOT, 'public');
 
 /* ---------------- 工具 ---------------- */
-const hashPw = pw => crypto.createHash('sha256').update('exam-demo::' + pw).digest('hex');
+const LEGACY_SALT = 'exam-demo::';
+function hashPw(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(LEGACY_SALT + String(pw), salt, 64).toString('hex');
+  return 'scrypt$' + salt + '$' + hash;
+}
+function isLegacyHash(h) { return typeof h === 'string' && /^[a-f0-9]{64}$/.test(h); }
+function verifyPw(pw, stored) {
+  if (typeof stored !== 'string' || !stored) return false;
+  if (stored.startsWith('scrypt$')) {
+    const parts = stored.split('$');
+    if (parts.length !== 3) return false;
+    const expected = Buffer.from(parts[2], 'hex');
+    if (!expected.length) return false;
+    let actual;
+    try { actual = crypto.scryptSync(LEGACY_SALT + String(pw), parts[1], expected.length); } catch { return false; }
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  }
+  if (isLegacyHash(stored)) {
+    const actual = crypto.createHash('sha256').update(LEGACY_SALT + String(pw)).digest();
+    const expected = Buffer.from(stored, 'hex');
+    return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+  }
+  return false;
+}
 const round1 = n => Math.round(n * 10) / 10;
 function lcg(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
 const nowISO = () => new Date().toISOString();
@@ -316,6 +340,10 @@ async function judgeCode(q, code) {
   }
   return { passed: results.filter(x => x.status === 'pass').length, total: cases.length, cases: results };
 }
+function judgeForStudent(judge, revealExpected) {
+  if (!judge || revealExpected) return judge;
+  return { ...judge, cases: (judge.cases || []).map(({ expected, ...item }) => item) };
+}
 async function gradeOneAsync(q, full, ans) {
   if (q.type !== 'code') return gradeOne(q, full, ans);
   if (ans === undefined || ans === null || !String(ans).trim()) return { score: 0, correct: false, judge: { passed: 0, total: (q.cases || []).length, cases: [] } };
@@ -429,21 +457,116 @@ async function callAIJson(messages) {
 
 /* ---------------- 数据存取 ---------------- */
 let DB;
-function saveDB() { fs.writeFileSync(DB_PATH, JSON.stringify(DB, null, 1)); }
-if (fs.existsSync(DB_PATH)) { DB = JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); }
-else { DB = seed(); fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }); saveDB(); }
+function saveDB() {
+  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+  const tmp = DB_PATH + '.tmp';
+  const data = JSON.stringify(DB, null, 1);
+  const fd = fs.openSync(tmp, 'w');
+  try { fs.writeFileSync(fd, data); fs.fsyncSync(fd); }
+  finally { fs.closeSync(fd); }
+  try { if (fs.existsSync(DB_PATH)) fs.copyFileSync(DB_PATH, DB_PATH + '.bak'); } catch (e) { console.error('备份数据文件失败：', e.message); }
+  fs.renameSync(tmp, DB_PATH);
+}
+function loadDB() {
+  for (const file of [DB_PATH, DB_PATH + '.bak']) {
+    if (!fs.existsSync(file)) continue;
+    try {
+      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (data && typeof data === 'object') return { db: data, file };
+    } catch (e) { console.error('数据文件读取失败：', file, e.message); }
+  }
+  return null;
+}
+const loadedDB = loadDB();
+if (loadedDB) {
+  DB = loadedDB.db;
+  if (loadedDB.file !== DB_PATH) { console.error('主数据文件损坏，已从备份恢复：', loadedDB.file); saveDB(); }
+} else {
+  if (fs.existsSync(DB_PATH)) throw new Error('data/db.json 无法解析，请检查文件或删除后重启以重建演示数据');
+  DB = seed(); saveDB();
+}
 if (!DB.settings) DB.settings = { ai: { enabled: false, baseUrl: '', apiKey: '', model: '' } };
 resetSheetExpiryTimers();
 
-const tokens = new Map(); // token -> userId
+const TOKEN_TTL = 12 * 3600 * 1000;
+const LOGIN_WINDOW = 10 * 60 * 1000, LOGIN_MAX = 10, LOGIN_LOCK = 5 * 60 * 1000;
+const tokens = new Map(); // token -> { userId, expiresAt }
+const loginAttempts = new Map(); // username@ip -> { count, firstAt, lockedUntil }
+function issueToken(userId) {
+  const token = crypto.randomBytes(24).toString('hex');
+  tokens.set(token, { userId, expiresAt: Date.now() + TOKEN_TTL });
+  return token;
+}
+function tokenOf(req) { const m = /^Bearer (.+)$/.exec(req.headers.authorization || ''); return m ? m[1] : ''; }
+function revokeUserTokens(userId, exceptToken) { for (const [t, rec] of tokens) if (rec.userId === userId && t !== exceptToken) tokens.delete(t); }
+function loginKey(req, username) { return String(username || '').toLowerCase() + '@' + ((req.socket && req.socket.remoteAddress) || 'unknown'); }
+function loginLockSeconds(key) {
+  const a = loginAttempts.get(key);
+  if (!a) return 0;
+  const now = Date.now();
+  if (a.lockedUntil && a.lockedUntil > now) return Math.ceil((a.lockedUntil - now) / 1000);
+  if (now - a.firstAt > LOGIN_WINDOW) loginAttempts.delete(key);
+  return 0;
+}
+function noteLoginFailure(key) {
+  const now = Date.now();
+  let a = loginAttempts.get(key);
+  if (!a || now - a.firstAt > LOGIN_WINDOW) a = { count: 0, firstAt: now };
+  a.count++;
+  if (a.count >= LOGIN_MAX) { a.lockedUntil = now + LOGIN_LOCK; a.count = 0; a.firstAt = now; }
+  loginAttempts.set(key, a);
+  if (loginAttempts.size > 5000) { for (const [k, v] of loginAttempts) if (!v.lockedUntil || v.lockedUntil < now) loginAttempts.delete(k); }
+}
 const byId = (arr, id) => arr.find(x => x.id === id);
 function examStatus(ex) { if (ex.stoppedAt) return '已停止'; const n = Date.now(); if (n < Date.parse(ex.startTime)) return '未开始'; if (n > Date.parse(ex.endTime)) return '已结束'; return '进行中'; }
 function publicUser(u) { return { id: u.id, username: u.username, name: u.name, role: u.role, className: u.className, status: u.status || 'active' }; }
 
+/* 练习会话：答题/判分只接受本次练习下发过的题目，避免按任意 qid 换取答案 */
+const PRACTICE_TTL = 2 * 3600 * 1000;
+const practiceSessions = new Map(); // id -> { userId, qids:Set, expiresAt }
+function newPracticeSession(userId, qids) {
+  const id = crypto.randomBytes(12).toString('hex');
+  practiceSessions.set(id, { userId, qids: new Set(qids), expiresAt: Date.now() + PRACTICE_TTL });
+  if (practiceSessions.size > 2000) { const now = Date.now(); for (const [k, v] of practiceSessions) if (v.expiresAt <= now) practiceSessions.delete(k); }
+  return id;
+}
+function practiceSessionFor(userId, sessionId) {
+  const key = String(sessionId || '');
+  const s = practiceSessions.get(key);
+  if (!s) return null;
+  if (s.expiresAt <= Date.now()) { practiceSessions.delete(key); return null; }
+  return s.userId === userId ? s : null;
+}
+/* 未开始或进行中的考试题目：练习和错题重练不得提前泄露答案 */
+function activeExamQids() {
+  const ids = new Set();
+  const papers = new Map(DB.papers.map(p => [p.id, p]));
+  for (const ex of DB.exams) {
+    if (ex.archivedAt || !['未开始', '进行中'].includes(examStatus(ex))) continue;
+    const paper = papers.get(ex.paperId);
+    if (paper) for (const it of paper.items) ids.add(it.qid);
+  }
+  return ids;
+}
+function studentWrongbookQids(studentId) {
+  const set = new Set();
+  for (const s of DB.sheets) {
+    if (s.studentId !== studentId || s.status !== 'submitted') continue;
+    const ex = byId(DB.exams, s.examId);
+    if (!ex || !ex.showAnswer) continue;
+    for (const d of s.details || []) {
+      if (d.score === null || d.score === undefined || d.score >= d.full) continue;
+      set.add(d.qid);
+    }
+  }
+  return set;
+}
+
 /* ---------------- HTTP 基础 ---------------- */
+const SECURITY_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' };
 function send(res, code, obj, headers) {
   const body = typeof obj === 'string' ? obj : JSON.stringify(obj);
-  res.writeHead(code, Object.assign({ 'Content-Type': typeof obj === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8' }, headers || {}));
+  res.writeHead(code, Object.assign({}, SECURITY_HEADERS, { 'Content-Type': typeof obj === 'string' ? 'text/plain; charset=utf-8' : 'application/json; charset=utf-8' }, headers || {}));
   res.end(body);
 }
 const ok = (res, data) => send(res, 200, { ok: true, data });
@@ -469,18 +592,47 @@ function normQuestion(body, createdBy) {
   }
   return { q };
 }
+function normalizePaperItems(raw, userId) {
+  if (!Array.isArray(raw) || !raw.length) return { error: '试卷至少要有一道题' };
+  const qmap = new Map(DB.questions.map(q => [q.id, q]));
+  const seen = new Set();
+  const items = [];
+  for (const it of raw) {
+    const qid = String((it && it.qid) || '');
+    const q = qmap.get(qid);
+    if (!q || q.createdBy !== userId) return { error: '存在无效或不属于当前教师的题目' };
+    if (seen.has(qid)) return { error: '试卷中存在重复题目' };
+    seen.add(qid);
+    const score = Number(it && it.score);
+    if (!Number.isFinite(score) || score <= 0 || score > 1000) return { error: '题目分值必须是 0 到 1000 之间的正数' };
+    items.push({ qid, score: round1(score) });
+  }
+  return { items };
+}
 function readBody(req) {
-  return new Promise(resolve => {
-    let buf = '';
-    req.on('data', c => { buf += c; if (buf.length > 2e6) req.destroy(); });
-    req.on('end', () => { try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({}); } });
+  return new Promise((resolve, reject) => {
+    let buf = '', done = false;
+    const tooLarge = () => {
+      if (done) return;
+      done = true;
+      const err = new Error('请求体超过 2MB 上限');
+      err.statusCode = 413;
+      reject(err);
+      try { req.destroy(); } catch (e) {}
+    };
+    req.on('data', c => { if (done) return; buf += c; if (buf.length > 2e6) tooLarge(); });
+    req.on('end', () => { if (done) return; done = true; try { resolve(buf ? JSON.parse(buf) : {}); } catch { resolve({}); } });
+    req.on('error', e => { if (done) return; done = true; reject(e); });
   });
 }
 function auth(req, roles) {
-  const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-  if (!m || !tokens.has(m[1])) return null;
-  const u = byId(DB.users, tokens.get(m[1]));
-  if (!u) return null;
+  const token = tokenOf(req);
+  if (!token) return null;
+  const rec = tokens.get(token);
+  if (!rec) return null;
+  if (rec.expiresAt <= Date.now()) { tokens.delete(token); return null; }
+  const u = byId(DB.users, rec.userId);
+  if (!u) { tokens.delete(token); return null; }
   if (roles && !roles.includes(u.role)) return null;
   return u;
 }
@@ -492,12 +644,24 @@ async function api(req, res, url) {
 
   // 登录
   if (p === '/api/login' && method === 'POST') {
-    const u = DB.users.find(x => x.username === body.username && x.password === hashPw(String(body.password || '')));
-    if (!u) return fail(res, 401, '账号或密码不正确');
+    const username = String(body.username || '').trim();
+    const key = loginKey(req, username);
+    const locked = loginLockSeconds(key);
+    if (locked) return fail(res, 429, `登录失败次数过多，请 ${locked} 秒后再试`);
+    const u = DB.users.find(x => x.username === username);
+    if (!u || !verifyPw(String(body.password || ''), u.password)) {
+      noteLoginFailure(key);
+      return fail(res, 401, '账号或密码不正确');
+    }
     if (u.status === 'pending') return fail(res, 403, '该账号已注册，正在等待管理员审核');
-    const token = crypto.randomBytes(24).toString('hex');
-    tokens.set(token, u.id);
-    return ok(res, { token, user: publicUser(u) });
+    loginAttempts.delete(key);
+    if (isLegacyHash(u.password)) { u.password = hashPw(String(body.password || '')); saveDB(); }
+    return ok(res, { token: issueToken(u.id), user: publicUser(u) });
+  }
+  if (p === '/api/logout' && method === 'POST') {
+    const t = tokenOf(req);
+    if (t) tokens.delete(t);
+    return ok(res, { loggedOut: true });
   }
 
   // 自助注册（学生注册即生效，教师注册需管理员审核）
@@ -519,10 +683,12 @@ async function api(req, res, url) {
   if (!me) return fail(res, 401, '未登录或登录已失效');
   if (p === '/api/me') return ok(res, publicUser(me));
   if (p === '/api/me/password' && method === 'POST') {
-    if (me.password !== hashPw(String(body.oldPassword || ''))) return fail(res, 400, '原密码不正确');
+    if (!verifyPw(String(body.oldPassword || ''), me.password)) return fail(res, 400, '原密码不正确');
     const np = String(body.newPassword || '');
     if (np.length < 6) return fail(res, 400, '新密码至少 6 位');
-    me.password = hashPw(np); saveDB();
+    me.password = hashPw(np);
+    revokeUserTokens(me.id, tokenOf(req));
+    saveDB();
     return ok(res, { changed: true });
   }
   if (p === '/api/me/profile' && method === 'POST') {
@@ -630,8 +796,9 @@ async function api(req, res, url) {
   }
   if (p === '/api/papers' && method === 'POST') {
     if (!teacher()) return;
-    const items = (body.items || []).map(it => ({ qid: it.qid, score: Number(it.score) || 5 }));
-    if (!items.length) return fail(res, 400, '试卷至少要有一道题');
+    const parsed = normalizePaperItems(body.items, me.id);
+    if (parsed.error) return fail(res, 400, parsed.error);
+    const items = parsed.items;
     const paper = { id: 'p' + (++DB.seq.paper), name: body.name || '未命名试卷', subject: body.subject || 'Linux基础', createdBy: me.id, createdAt: nowISO(), items, total: round1(items.reduce((s, it) => s + it.score, 0)) };
     DB.papers.push(paper); saveDB();
     return ok(res, paper);
@@ -927,7 +1094,7 @@ async function api(req, res, url) {
       if (sheet.status === 'answering') await finalizeSheet(sheet, ex.stoppedAt ? 'stopped' : 'timeout', ex.stoppedAt || nowISO());
       return fail(res, 400, ex.stoppedAt ? '考试已停止' : '答题时间已结束，答卷已自动提交');
     }
-    return ok(res, { judge });
+    return ok(res, { judge: judgeForStudent(judge, false) });
   }
   const submitMatch = /^\/api\/sheets\/(.+)\/submit$/.exec(p);
   if (submitMatch && method === 'POST') {
@@ -989,41 +1156,55 @@ async function api(req, res, url) {
   /* ----- 自主练习（学生，不计入正式成绩） ----- */
   if (p === '/api/practice/options' && method === 'GET') {
     if (!student()) return;
-    const pool = DB.questions.filter(q => q.type !== 'essay');
+    const activeQids = activeExamQids();
+    const pool = DB.questions.filter(q => q.type !== 'essay' && !activeQids.has(q.id));
     return ok(res, { tags: [...new Set(pool.map(q => q.tag || '未标注'))], types: [...new Set(pool.map(q => q.type))], total: pool.length });
   }
   if (p === '/api/practice/start' && method === 'POST') {
     if (!student()) return;
-    let pool = DB.questions.filter(q => q.type !== 'essay');
+    const activeQids = activeExamQids();
+    let pool = DB.questions.filter(q => q.type !== 'essay' && !activeQids.has(q.id));
     if (body.type) pool = pool.filter(q => q.type === body.type);
     if (body.tag) pool = pool.filter(q => (q.tag || '未标注') === body.tag);
     if (!pool.length) return fail(res, 400, '该范围下暂无可练习的题目');
     pool = [...pool].sort(() => Math.random() - 0.5);
     const n = Math.max(1, Math.min(20, Number(body.count) || 10));
     const questions = pool.slice(0, n).map(q => ({ id: q.id, type: q.type, stem: q.stem, options: q.options || [], score: q.score, blanks: q.type === 'fill' ? q.answer.length : 0, language: q.type === 'code' ? q.language : undefined, template: q.type === 'code' ? (q.template || '') : undefined, caseCount: q.type === 'code' ? (q.cases || []).length : undefined, tag: q.tag || '' }));
-    return ok(res, { questions });
+    return ok(res, { sessionId: newPracticeSession(me.id, questions.map(q => q.id)), questions });
   }
   if (p === '/api/practice/run' && method === 'POST') {
     if (!student()) return;
-    const q = byId(DB.questions, body.qid);
+    const session = practiceSessionFor(me.id, body.sessionId);
+    const qid = String(body.qid || '');
+    if (!session || !session.qids.has(qid)) return fail(res, 400, '练习会话无效或题目不属于本组练习');
+    if (activeExamQids().has(qid)) return fail(res, 400, '考试进行期间不能运行该题的练习判题');
+    const q = byId(DB.questions, qid);
     if (!q || q.type !== 'code') return fail(res, 400, '只有编程题可以运行测试');
     const judge = await judgeCode(q, body.code);
-    return ok(res, { judge });
+    return ok(res, { judge: judgeForStudent(judge, false) });
   }
   if (p === '/api/practice/submit' && method === 'POST') {
     if (!student()) return;
+    const session = practiceSessionFor(me.id, body.sessionId);
+    if (!session) return fail(res, 400, '练习会话无效或已过期，请重新开始练习');
     const items = Array.isArray(body.items) ? body.items.slice(0, 20) : [];
     if (!items.length) return fail(res, 400, '没有可提交的练习题');
     const results = [];
     let got = 0, total = 0;
+    const activeQids = activeExamQids();
+    const seen = new Set();
     for (const it of items) {
-      const q = byId(DB.questions, it.qid);
-      if (!q || q.type === 'essay') continue;
+      const qid = String((it && it.qid) || '');
+      if (!session.qids.has(qid) || activeQids.has(qid) || seen.has(qid)) return fail(res, 400, '提交中包含无效、重复或考试中的题目');
+      seen.add(qid);
+      const q = byId(DB.questions, qid);
+      if (!q || q.type === 'essay') return fail(res, 400, '提交中包含无效题目');
       const g = await gradeOneAsync(q, q.score, it.answer);
       got += g.score; total += q.score;
       results.push({ qid: q.id, score: g.score, full: q.score, correct: g.correct, answer: q.answer, analysis: q.analysis, judge: g.judge || undefined });
     }
     if (!results.length) return fail(res, 400, '没有可提交的练习题');
+    if ([...seen].some(qid => activeExamQids().has(qid))) return fail(res, 400, '练习题已进入进行中的考试，无法返回答案');
     return ok(res, { results, gotScore: round1(got), totalScore: total });
   }
 
@@ -1042,6 +1223,7 @@ async function api(req, res, url) {
   if (p === '/api/my/wrongbook' && method === 'GET') {
     if (!student()) return;
     const dismissed = new Set(me.wrongDismissed || []);
+    const activeQids = activeExamQids();
     const qmap = Object.fromEntries(DB.questions.map(q => [q.id, q]));
     const items = [];
     DB.sheets.filter(s => s.studentId === me.id && s.status === 'submitted').forEach(s => {
@@ -1052,7 +1234,7 @@ async function api(req, res, url) {
         const key = s.id + ':' + d.qid;
         if (dismissed.has(key)) return;
         const q = qmap[d.qid];
-        if (!q) return;
+        if (!q || activeQids.has(q.id)) return;
         items.push({ key, sheetId: s.id, examName: ex.name, submitAt: s.submitAt, qid: d.qid, type: q.type, stem: q.stem, options: q.options || [], myAnswer: d.answer, myScore: d.score, full: d.full, answer: q.answer, analysis: q.analysis, comment: d.comment || '', judge: d.judge || null, language: q.type === 'code' ? q.language : undefined, template: q.type === 'code' ? (q.template || '') : undefined, caseCount: q.type === 'code' ? (q.cases || []).length : undefined });
       });
     });
@@ -1060,10 +1242,26 @@ async function api(req, res, url) {
   }
   if (p === '/api/my/wrongbook/practice' && method === 'POST') {
     if (!student()) return;
-    const q = byId(DB.questions, body.qid);
+    const key = String(body.key || '');
+    const qid = String(body.qid || '');
+    const activeQids = activeExamQids();
+    const dismissed = new Set(me.wrongDismissed || []);
+    let detail = null;
+    if (key && !dismissed.has(key) && !activeQids.has(qid)) {
+      for (const sheet of DB.sheets) {
+        if (sheet.studentId !== me.id || sheet.status !== 'submitted') continue;
+        const ex = byId(DB.exams, sheet.examId);
+        if (!ex || !ex.showAnswer) continue;
+        const match = (sheet.details || []).find(d => `${sheet.id}:${d.qid}` === key && d.qid === qid && d.score !== null && d.score !== undefined && d.score < d.full);
+        if (match) { detail = match; break; }
+      }
+    }
+    if (!detail) return fail(res, 403, '该题不属于当前错题本或考试期间不可重练');
+    const q = byId(DB.questions, qid);
     if (!q) return fail(res, 404, '题目不存在');
     if (q.type === 'essay') return fail(res, 400, '简答题请对照参考答案自查');
-    const g = await gradeOneAsync(q, Number(body.full) || q.score, body.answer);
+    const g = await gradeOneAsync(q, detail.full, body.answer);
+    if (activeExamQids().has(qid)) return fail(res, 400, '该题已进入进行中的考试，无法返回答案');
     return ok(res, { correct: g.correct, score: g.score, answer: q.answer, analysis: q.analysis, judge: g.judge || undefined });
   }
   const wbDismiss = /^\/api\/my\/wrongbook\/(.+)\/dismiss$/.exec(p);
@@ -1088,7 +1286,7 @@ async function api(req, res, url) {
     const qmap = Object.fromEntries(DB.questions.map(q => [q.id, q]));
     const items = sheet.details.map(d => {
       const q = qmap[d.qid] || {};
-      return { qid: d.qid, type: q.type, stem: q.stem, options: q.options || [], myAnswer: d.answer, score: d.score, full: d.full, correct: d.correct, comment: d.comment || '', pending: d.score === null || d.score === undefined, answer: showAnswer ? q.answer : undefined, analysis: showAnswer ? q.analysis : undefined, judge: d.judge || null, language: q.type === 'code' ? q.language : undefined, caseCount: q.type === 'code' ? (q.cases || []).length : undefined };
+      return { qid: d.qid, type: q.type, stem: q.stem, options: q.options || [], myAnswer: d.answer, score: d.score, full: d.full, correct: d.correct, comment: d.comment || '', pending: d.score === null || d.score === undefined, answer: showAnswer ? q.answer : undefined, analysis: showAnswer ? q.analysis : undefined, judge: judgeForStudent(d.judge || null, !!showAnswer), language: q.type === 'code' ? q.language : undefined, caseCount: q.type === 'code' ? (q.cases || []).length : undefined };
     });
     const stu = byId(DB.users, sheet.studentId);
     return ok(res, { examName: ex ? ex.name : '', student: stu ? stu.name : '', score: sheet.score, switchCount: sheet.switchCount, submitAt: sheet.submitAt, showAnswer: !!showAnswer, items });

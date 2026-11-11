@@ -8,7 +8,7 @@ function judgeHtml(judge) {
   if (!judge) return '';
   const chip = st => ({ pass: '<span class="tag green">通过</span>', fail: '<span class="tag red">输出不符</span>', error: '<span class="tag red">运行错误</span>', timeout: '<span class="tag red">运行超时</span>', empty: '<span class="tag gray">未作答</span>' }[st] || `<span class="tag gray">${esc(st)}</span>`);
   return `<div class="judge-box"><div class="row spread"><strong>自动判题：通过 ${judge.passed} / ${judge.total} 个测试用例</strong><span class="sub small">每例限时 3 秒</span></div>
-  ${(judge.cases || []).map((c, i) => `<div class="case-row"><span style="width:58px;flex-shrink:0">用例 ${i + 1}</span>${chip(c.status)}<span class="case-io">输入 <code>${esc(c.input === '' || c.input === undefined ? '(空)' : c.input)}</code> · 期望 <code>${esc(c.expected)}</code> · 实际 <code>${esc(c.actual === '' || c.actual === undefined ? '(无输出)' : c.actual)}</code>${c.err ? `<br><span class="mine-bad small">${esc(c.err)}</span>` : ''}</span></div>`).join('')}</div>`;
+  ${(judge.cases || []).map((c, i) => `<div class="case-row"><span style="width:58px;flex-shrink:0">用例 ${i + 1}</span>${chip(c.status)}<span class="case-io">输入 <code>${esc(c.input === '' || c.input === undefined ? '(空)' : c.input)}</code> · 期望 <code>${c.expected === undefined ? '提交后可查看' : esc(c.expected)}</code> · 实际 <code>${esc(c.actual === '' || c.actual === undefined ? '(无输出)' : c.actual)}</code>${c.err ? `<br><span class="mine-bad small">${esc(c.err)}</span>` : ''}</span></div>`).join('')}</div>`;
 }
 let S = { token: localStorage.getItem('exam_token') || '', user: JSON.parse(localStorage.getItem('exam_user') || 'null'), view: '', questions: [], papers: [], exams: [] };
 
@@ -879,7 +879,7 @@ function practiceModal(it) {
     if (it.type === 'code') ans = document.getElementById('pr-code').value;
     if (ans === null || ans === '' || (Array.isArray(ans) && !ans.length)) return toast('先作答再提交', 'warn');
     try {
-      const r = await api('POST', '/api/my/wrongbook/practice', { qid: it.qid, answer: ans, full: it.full });
+      const r = await api('POST', '/api/my/wrongbook/practice', { key: it.key, qid: it.qid, answer: ans });
       const res = document.getElementById('pr-result');
       if (r.correct) {
         await api('POST', `/api/my/wrongbook/${encodeURIComponent(it.key)}/dismiss`);
@@ -904,8 +904,8 @@ async function viewPractice() {
     <label>题型 <select id="pr-type"><option value="">全部题型</option>${opts.types.map(t => `<option value="${t}">${TYPE_NAME[t]}</option>`).join('')}</select></label>
     <label>知识点 <select id="pr-tag"><option value="">全部知识点</option>${opts.tags.map(t => `<option>${esc(t)}</option>`).join('')}</select></label>
     <label>题量 <select id="pr-count">${[5, 10, 15, 20].map(n => `<option ${n === 10 ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
-    <button class="btn" id="pr-start">开始练习</button></div>
-  <p class="sub small mt">从题库随机抽题（不含简答题），答完统一提交、即时判分并显示答案与解析；练习成绩不计入正式考试统计。编程题可先「运行测试」自查再提交。</p></div>
+    <button class="btn" id="pr-start" ${opts.total ? '' : 'disabled'}>开始练习</button></div>
+  <p class="sub small mt">${opts.total ? '从题库随机抽题（不含简答题及未开始或进行中的考试题），答完统一提交、即时判分并显示答案与解析；练习成绩不计入正式考试统计。编程题可先「运行测试」自查再提交。' : '未开始或进行中的考试已覆盖题库中的练习题，考试结束后可再进行自主练习。'}</p></div>
   <div id="pr-area"></div>`;
   document.getElementById('pr-start').onclick = startPractice;
 }
@@ -913,7 +913,7 @@ async function startPractice() {
   let d;
   try { d = await api('POST', '/api/practice/start', { type: document.getElementById('pr-type').value, tag: document.getElementById('pr-tag').value, count: Number(document.getElementById('pr-count').value) }); }
   catch (e) { toast(e.message, 'err'); return; }
-  PR = { questions: d.questions, answers: {} };
+  PR = { sessionId: d.sessionId, questions: d.questions, answers: {} };
   const area = document.getElementById('pr-area');
   area.innerHTML = d.questions.map((q, i) => `<div class="card review-item"><div class="row spread"><span class="tag">${TYPE_NAME[q.type]}</span><span class="sub">第 ${i + 1} 题 · ${q.score} 分${q.tag ? ' · ' + esc(q.tag) : ''}</span></div>
   <p style="margin:10px 0;line-height:1.7;white-space:pre-wrap">${esc(q.stem)}</p><div data-prq="${q.id}"></div><div id="pr-res-${q.id}" class="mt"></div></div>`).join('') +
@@ -922,7 +922,7 @@ async function startPractice() {
   document.getElementById('pr-again').onclick = startPractice;
   document.getElementById('pr-submit').onclick = async () => {
     try {
-      const r = await api('POST', '/api/practice/submit', { items: PR.questions.map(q => ({ qid: q.id, answer: PR.answers[q.id] })) });
+      const r = await api('POST', '/api/practice/submit', { sessionId: PR.sessionId, items: PR.questions.map(q => ({ qid: q.id, answer: PR.answers[q.id] })) });
       const byQ = Object.fromEntries(r.results.map(x => [x.qid, x]));
       PR.questions.forEach(q => {
         const res = byQ[q.id]; if (!res) return;
@@ -961,7 +961,7 @@ function renderPracticeQ(q) {
     ta.addEventListener('input', () => { PR.answers[q.id] = ta.value; });
     host.querySelector('[data-prun]').onclick = async () => {
       const box = host.querySelector('[data-prunres]');
-      try { const r = await api('POST', '/api/practice/run', { qid: q.id, code: ta.value }); box.innerHTML = judgeHtml(r.judge); }
+      try { const r = await api('POST', '/api/practice/run', { sessionId: PR.sessionId, qid: q.id, code: ta.value }); box.innerHTML = judgeHtml(r.judge); }
       catch (e) { box.innerHTML = `<span class="mine-bad">${esc(e.message)}</span>`; }
     };
   }

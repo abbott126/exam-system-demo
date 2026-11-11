@@ -31,6 +31,7 @@ docker compose down            # 停止（数据保留）
 
 - 数据（`db.json`）存放在命名数据卷 `exam-data` 中，容器重建/升级不丢数据；想恢复初始演示数据：`docker compose down -v` 后重新 `up`。
 - 时区已设为 `Asia/Shanghai`（考试时间窗口按本地时间锚定）。
+- Compose 的 3000 端口默认发布到宿主机所有网络接口；编程题判题未做系统级沙箱隔离，只应在可信、隔离的演示网络使用，勿做端口转发或暴露公网。
 - 不用 Compose 也可以：`docker build -t exam-system:1.0 .` 后 `docker run -d --name exam-system -p 3000:3000 -v exam-data:/app/data exam-system:1.0`。
 
 首次启动会自动生成演示数据到 `data/db.json`；想恢复到初始演示状态，停掉服务后删掉该文件再重启即可。
