@@ -13,7 +13,7 @@ function judgeHtml(judge) {
 let S = { token: localStorage.getItem('exam_token') || '', user: JSON.parse(localStorage.getItem('exam_user') || 'null'), view: '', questions: [], papers: [], exams: [] };
 
 const esc = s => String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmtDT = iso => iso ? String(iso).replace('T', ' ').slice(0, 16) : '-';
+const fmtDT = iso => { if (!iso) return '-'; const d = new Date(iso); if (Number.isNaN(d.getTime())) return String(iso); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
 const toLocal = iso => { const d = new Date(iso || Date.now()); const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
 function toast(msg, kind) { const t = document.createElement('div'); t.className = 'toast' + (kind ? ' ' + kind : ''); t.textContent = msg; document.getElementById('toast-root').appendChild(t); setTimeout(() => t.remove(), 2600); }
 function openModal(html, wide) { $modal.innerHTML = `<div class="modal-mask"><div class="modal${wide ? ' wide' : ''}">${html}</div></div>`; $modal.querySelector('.modal-mask').addEventListener('mousedown', e => { if (e.target.classList.contains('modal-mask')) closeModal(); }); }
@@ -79,19 +79,33 @@ async function downloadAuthed(path, filename) {
 }
 
 /* ---------------- 登录 ---------------- */
-function renderLogin(err, prefillUser) {
-  $app.innerHTML = `<div class="login-wrap"><div class="login-card">
-    <h1>考试系统</h1><p class="tip">教师组卷 · 学生考试 · 自动判分 · 成绩统计 · v1.0 正式版</p>
-    <div class="err">${esc(err || '')}</div>
-    <label>账号<input id="lg-user" autocomplete="username" placeholder="请输入账号" value="${esc(prefillUser || '')}"></label>
-    <label>密码<input id="lg-pw" type="password" autocomplete="current-password" placeholder="请输入密码"></label>
-    <button class="btn" id="lg-btn">登 录</button>
-    <div class="quick">
-      <button data-u="teacher">教师演示号</button><button data-u="student">学生演示号</button><button data-u="admin">管理员演示号</button>
+const AUTH_LOGO_MARK = `<span class="auth-logo-mark"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10 12 5 2 10l10 5 10-5Z"/><path d="M6 12v5c0 1.66 2.69 3 6 3s6-1.34 6-3v-5"/></svg></span>`;
+const AUTH_BRAND_HTML = `<aside class="auth-brand">
+    <div class="auth-glow auth-glow-a"></div><div class="auth-glow auth-glow-b"></div><div class="auth-grid"></div>
+    <div class="auth-brand-inner">
+      <div class="auth-logo">${AUTH_LOGO_MARK}<span class="auth-logo-text">智考<em>考试系统</em></span></div>
+      <h1 class="auth-brand-title">让每一次考试<br><span>更高效、更可信</span></h1>
+      <p class="auth-brand-sub">教师组卷 · 学生考试 · 自动判分 · 成绩统计</p>
+      <ul class="auth-features">
+        <li><span class="auth-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><div><strong>智能自动判分</strong><span>客观题即时出分，编程题按测试用例自动评分</span></div></li>
+        <li><span class="auth-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg></span><div><strong>AI 辅助批改</strong><span>主观题给出建议评分与评语，教师确认后生效</span></div></li>
+        <li><span class="auth-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></span><div><strong>数据洞察</strong><span>成绩分布、知识点掌握度与班级对比一目了然</span></div></li>
+      </ul>
+      <div class="auth-brand-foot">v1.0 正式版 · 单机零依赖部署 · 断网可用</div>
     </div>
-    <p class="sub small mt">内置演示账号密码均为 123456（对应 PRD 4.1 节）</p>
-    <p class="sub small mt">还没有账号？<button class="link" id="go-register" style="color:var(--primary-d)">立即注册</button>（学生注册即生效，教师注册需管理员审核）</p>
-  </div></div>`;
+  </aside>`;
+function renderLogin(err, prefillUser) {
+  $app.innerHTML = `<div class="auth-shell">${AUTH_BRAND_HTML}
+  <main class="auth-main"><div class="auth-panel">
+    <div class="auth-mobile-brand">${AUTH_LOGO_MARK}<strong>智考 · 考试系统</strong></div>
+    <div class="auth-panel-head"><span class="auth-eyebrow">欢迎回来</span><h2>登录你的账号</h2><p>使用教师、学生或管理员账号进入系统</p></div>
+    <div class="err">${esc(err || '')}</div>
+    <div class="auth-field"><label for="lg-user">账号</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><input id="lg-user" autocomplete="username" placeholder="请输入账号" value="${esc(prefillUser || '')}"></div></div>
+    <div class="auth-field"><label for="lg-pw">密码</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span><input id="lg-pw" type="password" autocomplete="current-password" placeholder="请输入密码"><button type="button" class="auth-eye" id="lg-eye" aria-label="显示密码"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div></div>
+    <button class="btn auth-submit" id="lg-btn">登 录</button>
+    <p class="auth-switch">还没有账号？<button class="link" id="go-register">立即注册</button> <span>（注册后需管理员审核通过）</span></p>
+  </div></main>
+</div>`;
   const doLogin = async (u, p) => {
     try {
       const d = await api('POST', '/api/login', { username: u, password: p });
@@ -100,24 +114,34 @@ function renderLogin(err, prefillUser) {
       enterApp();
     } catch (e) { renderLogin(e.message); }
   };
-  document.getElementById('lg-btn').onclick = () => doLogin(document.getElementById('lg-user').value.trim(), document.getElementById('lg-pw').value);
-  document.getElementById('lg-pw').addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('lg-btn').click(); });
-  $app.querySelectorAll('.quick button').forEach(b => b.onclick = () => doLogin(b.dataset.u, '123456'));
+  const pwInput = document.getElementById('lg-pw');
+  const eye = document.getElementById('lg-eye');
+  eye.onclick = () => {
+    const show = pwInput.type === 'password';
+    pwInput.type = show ? 'text' : 'password';
+    eye.classList.toggle('on', show);
+    eye.setAttribute('aria-label', show ? '隐藏密码' : '显示密码');
+  };
+  document.getElementById('lg-btn').onclick = () => doLogin(document.getElementById('lg-user').value.trim(), pwInput.value);
+  pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('lg-btn').click(); });
   document.getElementById('go-register').onclick = () => renderRegister();
 }
 async function renderRegister(err) {
-  $app.innerHTML = `<div class="login-wrap"><div class="login-card">
-    <h1>注册账号</h1><p class="tip">学生注册后可直接登录；教师账号需管理员审核通过</p>
+  $app.innerHTML = `<div class="auth-shell">${AUTH_BRAND_HTML}
+  <main class="auth-main"><div class="auth-panel">
+    <div class="auth-mobile-brand">${AUTH_LOGO_MARK}<strong>智考 · 考试系统</strong></div>
+    <div class="auth-panel-head"><span class="auth-eyebrow">创建账号</span><h2>注册新账号</h2><p>注册后需管理员审核，审核通过即可登录</p></div>
     <div class="err">${esc(err || '')}</div>
-    <label>账号<input id="rg-user" autocomplete="username" placeholder="登录用账号，如 stu31"></label>
-    <label>姓名<input id="rg-name" placeholder="真实姓名"></label>
-    <label>身份<select id="rg-role"><option value="student">学生</option><option value="teacher">教师</option></select></label>
-    <label id="rg-class-wrap">班级<input id="rg-class" list="rg-classes" placeholder="如 计算机1班"><datalist id="rg-classes"></datalist></label>
-    <label>密码（至少 6 位）<input id="rg-pw" type="password" autocomplete="new-password" placeholder="设置密码"></label>
-    <label>确认密码<input id="rg-pw2" type="password" autocomplete="new-password" placeholder="再输一次"></label>
-    <button class="btn" id="rg-btn">注 册</button>
-    <p class="sub small mt">已有账号？<button class="link" id="go-login" style="color:var(--primary-d)">返回登录</button></p>
-  </div></div>`;
+    <div class="auth-field"><label for="rg-user">账号</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><input id="rg-user" autocomplete="username" placeholder="登录用账号，如 stu31"></div></div>
+    <div class="auth-field"><label for="rg-name">姓名</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span><input id="rg-name" placeholder="真实姓名"></div></div>
+    <div class="auth-field"><label for="rg-role">身份</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 8h10M7 12h6"/></svg></span><select id="rg-role"><option value="student">学生</option><option value="teacher">教师</option></select></div></div>
+    <div class="auth-field" id="rg-class-wrap"><label for="rg-class">班级</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/></svg></span><input id="rg-class" list="rg-classes" placeholder="如 计算机1班"><datalist id="rg-classes"></datalist></div></div>
+    <div class="auth-field"><label for="rg-pw">密码（至少 6 位）</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span><input id="rg-pw" type="password" autocomplete="new-password" placeholder="设置密码"></div></div>
+    <div class="auth-field"><label for="rg-pw2">确认密码</label><div class="auth-input"><span class="auth-input-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span><input id="rg-pw2" type="password" autocomplete="new-password" placeholder="再输一次"></div></div>
+    <button class="btn auth-submit" id="rg-btn">注 册</button>
+    <p class="auth-switch">已有账号？<button class="link" id="go-login">返回登录</button></p>
+  </div></main>
+</div>`;
   api('GET', '/api/public/classes').then(cls => { const dl = document.getElementById('rg-classes'); if (dl) dl.innerHTML = cls.map(c => `<option value="${esc(c)}">`).join(''); }).catch(() => { /* 班级列表拉取失败不影响注册 */ });
   const roleSel = document.getElementById('rg-role');
   roleSel.onchange = () => { document.getElementById('rg-class-wrap').style.display = roleSel.value === 'student' ? '' : 'none'; };
@@ -127,7 +151,7 @@ async function renderRegister(err) {
     if (body.password !== document.getElementById('rg-pw2').value) return renderRegisterKeep(body, '两次输入的密码不一致');
     try {
       const r = await api('POST', '/api/register', body);
-      if (r.status === 'pending') renderLogin('注册已提交：教师账号需管理员在「用户管理」中审核通过后才能登录。');
+      if (r.status === 'pending') renderLogin('注册已提交：请等待管理员在「用户管理」中审核通过后再登录。');
       else { renderLogin('', body.username); toast('注册成功，请登录'); }
     } catch (e) { renderRegisterKeep(body, e.message); }
   };
@@ -139,7 +163,7 @@ async function renderRegister(err) {
     });
   }
 }
-function logout() { S.token = ''; S.user = null; localStorage.removeItem('exam_token'); localStorage.removeItem('exam_user'); if (window.__examTimer) clearInterval(window.__examTimer); if (window.__monTimer) clearInterval(window.__monTimer); renderLogin(); }
+function logout() { S.token = ''; S.user = null; localStorage.removeItem('exam_token'); localStorage.removeItem('exam_user'); if (window.__examTimer) clearInterval(window.__examTimer); if (window.__monTimer) clearInterval(window.__monTimer); stopReminderTimer(); renderLogin(); }
 
 /* ---------------- 主框架 ---------------- */
 const NAVS = {
@@ -199,6 +223,7 @@ function changePasswordForm() {
 }
 function renderView() {
   if (window.__monTimer) clearInterval(window.__monTimer);
+  stopReminderTimer();
   window.scrollTo(0, 0);
   const v = S.view;
   if (S.user.role === 'teacher') { if (v === 'questions') return viewQuestions(); if (v === 'papers') return viewPapers(); if (v === 'exams') return viewExams(); if (v === 'stats') return viewStats(); }
@@ -437,11 +462,12 @@ async function viewExams() {
   const showArchived = !!S.showArchivedExams;
   S.exams = await api('GET', '/api/exams' + (showArchived ? '?archived=1' : ''));
   if (!S.papers.length) S.papers = await api('GET', '/api/papers');
+  if (!S.classes) S.classes = await api('GET', '/api/public/classes');
   main().innerHTML = `<h2>考试管理</h2>
   <div class="card"><div class="row spread"><span class="sub">发布考试后，学生在时间窗口内参加；状态按时间自动流转。归档会隐藏考试但保留答卷、成绩和试卷引用。</span>${showArchived ? '' : '<button class="btn" id="e-new">＋ 发布考试</button>'}</div>
   <div class="row mt"><button class="btn small ${showArchived ? 'ghost' : ''}" data-exam-view="active">考试列表</button><button class="btn small ${showArchived ? '' : 'ghost'}" data-exam-view="archived">已归档</button></div></div>
   ${S.exams.length ? `<div class="card"><table><tr><th>考试名称</th><th>试卷</th><th>时间窗口</th><th>时长</th><th>状态</th><th>参考/交卷</th><th>平均分</th><th>操作</th></tr>
-  ${S.exams.map(e => { const pp = S.papers.find(x => x.id === e.paperId); return `<tr><td><strong>${esc(e.name)}</strong></td><td>${esc(pp ? pp.name : '-')}</td><td class="small">${fmtDT(e.startTime)} ~ ${fmtDT(e.endTime)}</td><td>${e.durationMin} 分钟</td><td>${statusTag(e.status)}</td><td>${e.joined} / ${e.submitted}${e.pendingGrading ? `<br><span class="tag orange">待批改 ${e.pendingGrading} 份</span>` : ''}</td><td>${e.avg === null ? '-' : e.avg}</td>
+  ${S.exams.map(e => { const pp = S.papers.find(x => x.id === e.paperId); return `<tr><td><strong>${esc(e.name)}</strong>${(e.classNames && e.classNames.length) ? ` <span class="tag gray">${esc(e.classNames.join('、'))}</span>` : ''}${e.accessCode ? ' <span class="tag orange">需口令</span>' : ''}</td><td>${esc(pp ? pp.name : '-')}</td><td class="small">${fmtDT(e.startTime)} ~ ${fmtDT(e.endTime)}</td><td>${e.durationMin} 分钟</td><td>${statusTag(e.status)}</td><td>${e.joined} / ${e.submitted}${e.pendingGrading ? `<br><span class="tag orange">待批改 ${e.pendingGrading} 份</span>` : ''}</td><td>${e.avg === null ? '-' : e.avg}</td>
   <td>${e.status === '未开始' && !showArchived ? `<button class="link" data-editexam="${e.id}">编辑</button><button class="link danger" data-delexam="${e.id}">删除</button>` : `<button class="link" data-gostats="${e.id}">看统计</button>`}${e.status === '进行中' && !showArchived ? `<button class="link" data-monitor="${e.id}">监考</button><button class="link danger" data-stop-exam="${e.id}">停止考试</button>` : ''}${showArchived ? `<button class="link" data-unarchive="${e.id}">恢复</button>` : e.status !== '进行中' ? `<button class="link" data-archive="${e.id}">归档</button>` : ''}${!showArchived ? `<button class="link" data-dupexam="${e.id}">复制</button>` : ''}</td></tr>`; }).join('')}</table></div>` : `<div class="card"><div class="empty">${showArchived ? '暂无已归档考试。' : '暂无考试。'}</div></div>`}`;
   main().querySelectorAll('[data-exam-view]').forEach(b => b.onclick = () => { S.showArchivedExams = b.dataset.examView === 'archived'; viewExams(); });
   const newExamButton = document.getElementById('e-new'); if (newExamButton) newExamButton.onclick = () => examForm();
@@ -473,11 +499,13 @@ function examForm(exam) {
   <label style="flex:1">结束时间<input id="fe-end" type="datetime-local" value="${exam ? toLocal(exam.endTime) : toLocal(end)}"></label>
   <label style="flex:1">考试时长（分钟）<input id="fe-dur" type="number" min="1" value="${exam ? exam.durationMin : 30}"></label>
   <label style="flex:1">切屏上限（次，0=不限制）<input id="fe-limit" type="number" min="0" value="${exam ? (exam.switchLimit || 0) : 0}"></label></div>
+  <div class="form-field"><div class="lbl">参考班级（不选 = 全部学生）</div><div class="class-pick">${(S.classes || []).map(c => `<label><input type="checkbox" class="fe-class" value="${esc(c)}" ${exam && (exam.classNames || []).includes(c) ? 'checked' : ''}>${esc(c)}</label>`).join('') || '<span class="sub small">暂无班级，可在管理员「班级管理」中添加</span>'}</div></div>
+  <label>考试口令（可选）<input id="fe-code" maxlength="32" value="${esc(exam ? (exam.accessCode || '') : '')}" placeholder="留空则无需口令"></label>
   <label style="color:var(--ink)"><input type="checkbox" id="fe-show" ${!exam || exam.showAnswer ? 'checked' : ''}> 交卷后向学生展示正确答案与解析</label>
   <label>考试说明<textarea id="fe-note" rows="2">${esc(exam ? (exam.note || '') : '闭卷答题，请独立完成。')}</textarea></label></div>
   <div class="row" style="justify-content:flex-end"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" id="fe-save">${exam ? '保存修改' : '发布考试'}</button></div>`);
   document.getElementById('fe-save').onclick = async () => {
-    const body = { name: document.getElementById('fe-name').value.trim(), paperId: document.getElementById('fe-paper').value, startTime: new Date(document.getElementById('fe-start').value).toISOString(), endTime: new Date(document.getElementById('fe-end').value).toISOString(), durationMin: Number(document.getElementById('fe-dur').value) || 30, switchLimit: Math.max(0, Number(document.getElementById('fe-limit').value) || 0), showAnswer: document.getElementById('fe-show').checked, note: document.getElementById('fe-note').value };
+    const body = { name: document.getElementById('fe-name').value.trim(), paperId: document.getElementById('fe-paper').value, startTime: new Date(document.getElementById('fe-start').value).toISOString(), endTime: new Date(document.getElementById('fe-end').value).toISOString(), durationMin: Number(document.getElementById('fe-dur').value) || 30, switchLimit: Math.max(0, Number(document.getElementById('fe-limit').value) || 0), showAnswer: document.getElementById('fe-show').checked, note: document.getElementById('fe-note').value, classNames: [...document.querySelectorAll('.fe-class:checked')].map(x => x.value), accessCode: document.getElementById('fe-code').value.trim() };
     if (!body.name) return toast('考试名称不能为空', 'err');
     try { if (exam) { await api('PUT', '/api/exams/' + exam.id, body); toast('考试已更新'); } else { await api('POST', '/api/exams', body); toast('考试已发布'); } closeModal(); viewExams(); } catch (e) { toast(e.message, 'err'); }
   };
@@ -620,9 +648,37 @@ async function viewGrade(sheetId) {
 }
 
 /* ================= 学生端 ================= */
+const REMIND_WINDOW_MS = 30 * 60 * 1000;
+function stopReminderTimer() { if (window.__reminderTimer) { clearInterval(window.__reminderTimer); window.__reminderTimer = null; } }
+function reminderItems(exams, now) {
+  return exams
+    .map(e => ({ e, remain: Date.parse(e.startTime) - now }))
+    .filter(({ e, remain }) => e.status === '未开始' && remain > 0 && remain <= REMIND_WINDOW_MS && !(e.mySheet && e.mySheet.status === 'submitted'))
+    .sort((a, b) => a.remain - b.remain);
+}
+function remainText(ms) { const m = Math.floor(ms / 60000); return m >= 1 ? `还有 ${m} 分钟` : '不到 1 分钟'; }
+function reminderHtml(exams) {
+  const items = reminderItems(exams, Date.now());
+  if (!items.length) return '';
+  return `<div class="card reminder"><div class="reminder-head"><span class="tag orange">即将开考</span><span class="sub small">以下考试将在 30 分钟内开始，请提前做好准备</span></div>
+  ${items.map(({ e, remain }) => `<div class="reminder-item"><span><strong>${esc(e.name)}</strong><span class="sub small"> · 开考时间 ${fmtDT(e.startTime)}</span></span><span class="reminder-remain">${remainText(remain)}</span></div>`).join('')}</div>`;
+}
+function scheduleReminderPoll() {
+  stopReminderTimer();
+  window.__reminderTimer = setInterval(() => {
+    if (S.view !== 'examlist' || !S.user || S.user.role !== 'student') { stopReminderTimer(); return; }
+    viewExamList().catch(() => {});
+  }, 60000);
+}
 async function viewExamList() {
-  S.exams = await api('GET', '/api/exams');
+  stopReminderTimer();
+  let list;
+  try { list = await api('GET', '/api/exams'); }
+  catch (e) { if (S.view === 'examlist') scheduleReminderPoll(); throw e; }
+  if (S.view !== 'examlist') return;
+  S.exams = list;
   main().innerHTML = `<h2>参加考试</h2>
+  ${reminderHtml(S.exams)}
   ${S.exams.length ? S.exams.map(e => {
     let action = '';
     if (e.mySheet && e.mySheet.status === 'submitted') action = `<span class="tag green">已交卷 · ${e.mySheet.score} 分</span> <button class="btn ghost small" data-review="${e.mySheet.id}">查看回顾</button>`;
@@ -633,14 +689,29 @@ async function viewExamList() {
     else action = `<button class="btn" data-start="${e.id}">开始考试</button>`;
     return `<div class="card"><div class="row spread"><div><strong>${esc(e.name)}</strong> ${statusTag(e.status)}<div class="sub small mt">时间窗口：${fmtDT(e.startTime)} ~ ${fmtDT(e.endTime)} · 时长 ${e.durationMin} 分钟<br>${esc(e.note || '')}</div></div><div class="row">${action}</div></div></div>`;
   }).join('') : '<div class="card"><div class="empty">暂无考试安排。</div></div>'}`;
-  main().querySelectorAll('[data-start]').forEach(b => b.onclick = () => startExam(b.dataset.start));
+  main().querySelectorAll('[data-start]').forEach(b => b.onclick = () => {
+    const exam = S.exams.find(x => x.id === b.dataset.start);
+    if (exam && exam.hasAccessCode && !exam.mySheet) askExamCode(exam);
+    else startExam(b.dataset.start);
+  });
   main().querySelectorAll('[data-review]').forEach(b => b.onclick = () => viewReview(b.dataset.review, 'examlist'));
+  scheduleReminderPoll();
 }
 
 let EX = null; // 考试进行态
-async function startExam(examId) {
+function askExamCode(exam) {
+  openModal(`<h3>输入考试口令</h3><p>「${esc(exam.name)}」需要口令才能进入，请向监考教师获取。</p>
+  <div class="form-grid"><label>考试口令<input id="ex-code" maxlength="32" autocomplete="off" placeholder="输入口令"></label></div>
+  <div class="row" style="justify-content:flex-end"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" id="ex-code-go">进入考试</button></div>`);
+  const go = () => { const code = document.getElementById('ex-code').value.trim(); if (!code) return toast('请输入考试口令', 'warn'); closeModal(); startExam(exam.id, code); };
+  document.getElementById('ex-code-go').onclick = go;
+  document.getElementById('ex-code').addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+  setTimeout(() => document.getElementById('ex-code').focus(), 30);
+}
+async function startExam(examId, accessCode) {
+  stopReminderTimer();
   let d;
-  try { d = await api('POST', `/api/exams/${examId}/start`); }
+  try { d = await api('POST', `/api/exams/${examId}/start`, accessCode ? { accessCode } : undefined); }
   catch (e) { toast(e.message, 'err'); return; }
   EX = { ...d, idx: 0, answers: JSON.parse(JSON.stringify(d.answers || {})), marked: new Set(d.marked || []), switchCount: d.switchCount || 0, submitted: false, stopping: false, warned5: false, saveTimer: null, lastSwitchAt: 0 };
   S.view = 'taking';
@@ -811,6 +882,7 @@ async function viewMyScores() {
   main().querySelectorAll('[data-review]').forEach(b => b.onclick = () => viewReview(b.dataset.review, 'myscores'));
 }
 async function viewReview(sheetId, backView) {
+  stopReminderTimer();
   let r;
   try { r = await api('GET', `/api/sheets/${sheetId}/review`); } catch (e) { toast(e.message, 'err'); return; }
   let aiOn = false; try { aiOn = (await api('GET', '/api/ai/status')).enabled; } catch (e) { /* AI 状态拉取失败不影响回顾 */ }
@@ -992,10 +1064,10 @@ async function viewUsers() {
   const roleName = { teacher: '教师', student: '学生', admin: '管理员' };
   const pending = users.filter(u => u.status === 'pending');
   const active = users.filter(u => u.status !== 'pending');
-  main().innerHTML = `<div class="row spread mb"><h2 style="margin:0">用户管理</h2><div class="row"><button class="btn ghost" id="u-import">批量导入学生</button><button class="btn" id="u-add">＋ 新增用户</button></div></div>${pending.length ? `<div class="card" style="border-color:var(--warn);background:#fffbeb"><strong>待审核注册（${pending.length}）</strong>${pending.map(u => `<div class="checkrow" style="margin-top:8px;background:#fff"><span style="flex:1">${esc(u.name)}（${esc(u.username)}）申请注册为${roleName[u.role]}</span><button class="btn small" data-approve="${u.id}">通过</button><button class="btn ghost small" data-deluser="${u.id}">拒绝</button></div>`).join('')}</div>` : ''}<div class="card"><table><tr><th>账号</th><th>姓名</th><th>角色</th><th>班级</th><th>操作</th></tr>
+  main().innerHTML = `<div class="row spread mb"><h2 style="margin:0">用户管理</h2><div class="row"><button class="btn ghost" id="u-import">批量导入学生</button><button class="btn" id="u-add">＋ 新增用户</button></div></div>${pending.length ? `<div class="card" style="border-color:var(--warn);background:#fffbeb"><strong>待审核注册（${pending.length}）</strong>${pending.map(u => `<div class="checkrow" style="margin-top:8px;background:#fff"><span style="flex:1">${esc(u.name)}（${esc(u.username)}）申请注册为${roleName[u.role]}${u.role === 'student' && u.className ? ' · 班级：' + esc(u.className) : ''}</span><button class="btn small" data-approve="${u.id}">通过</button><button class="btn ghost small" data-deluser="${u.id}">拒绝</button></div>`).join('')}</div>` : ''}<div class="card"><table><tr><th>账号</th><th>姓名</th><th>角色</th><th>班级</th><th>操作</th></tr>
   ${active.map(u => `<tr><td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${roleName[u.role]}</td><td>${esc(u.className || '-')}</td>
   <td><button class="link" data-edituser="${u.id}">编辑</button>${u.role === 'student' ? `<button class="link" data-reset="${u.id}">重置密码</button>` : ''}${u.id !== S.user.id ? `<button class="link danger" data-deluser="${u.id}">删除</button>` : ''}</td></tr>`).join('')}</table>
-  <p class="sub small mt">重置后密码为初始密码 123456。已有答卷记录的用户不能删除。批量导入的学生初始密码统一为 123456。教师自助注册的账号会出现在上方待审核区。</p></div>`;
+  <p class="sub small mt">重置后密码为初始密码 123456。已有答卷记录的用户不能删除。批量导入的学生初始密码统一为 123456。自助注册的账号会出现在上方待审核区。</p></div>`;
   main().querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => { try { await api('POST', `/api/admin/users/${b.dataset.approve}/approve`); toast('已通过审核'); viewUsers(); } catch (e) { toast(e.message, 'err'); } });
   main().querySelectorAll('[data-edituser]').forEach(b => b.onclick = () => userEditForm(users.find(u => u.id === b.dataset.edituser)));
   main().querySelectorAll('[data-reset]').forEach(b => b.onclick = () => confirmBox('确定把该学生密码重置为 123456 吗？', async () => { await api('POST', `/api/admin/users/${b.dataset.reset}/reset`); toast('已重置'); }));

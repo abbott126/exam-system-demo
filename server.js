@@ -45,6 +45,7 @@ function verifyPw(pw, stored) {
 const round1 = n => Math.round(n * 10) / 10;
 function lcg(seed) { let s = seed >>> 0; return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; }; }
 const nowISO = () => new Date().toISOString();
+const fmtLocal = iso => { const d = new Date(iso); if (Number.isNaN(d.getTime())) return ''; const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 
 /* ---------------- 演示数据（种子） ---------------- */
 function seed() {
@@ -488,6 +489,7 @@ if (loadedDB) {
 if (!DB.settings) DB.settings = { ai: { enabled: false, baseUrl: '', apiKey: '', model: '' } };
 resetSheetExpiryTimers();
 
+<<<<<<< HEAD
 const TOKEN_TTL = 12 * 3600 * 1000;
 const LOGIN_WINDOW = 10 * 60 * 1000, LOGIN_MAX = 10, LOGIN_LOCK = 5 * 60 * 1000;
 const tokens = new Map(); // token -> { userId, expiresAt }
@@ -516,9 +518,40 @@ function noteLoginFailure(key) {
   if (a.count >= LOGIN_MAX) { a.lockedUntil = now + LOGIN_LOCK; a.count = 0; a.firstAt = now; }
   loginAttempts.set(key, a);
   if (loginAttempts.size > 5000) { for (const [k, v] of loginAttempts) if (!v.lockedUntil || v.lockedUntil < now) loginAttempts.delete(k); }
+=======
+const tokens = new Map(); // token -> userId
+const FAIL_IDLE_MS = 10 * 60000;
+function pruneFailMap(map, now) {
+  for (const [k, v] of map) if (v.lockedUntil <= now && now - v.last > FAIL_IDLE_MS) map.delete(k);
+  if (map.size > 500) for (const k of map.keys()) { map.delete(k); if (map.size <= 250) break; }
+}
+function bumpFail(map, key, max, lockMs, now) {
+  const r = map.get(key) || { count: 0, lockedUntil: 0, last: 0 };
+  r.count++; r.last = now;
+  if (r.count >= max) { r.lockedUntil = now + lockMs; r.count = 0; }
+  map.set(key, r);
+}
+const loginFails = new Map();
+const LOGIN_MAX_FAILS = 5, LOGIN_LOCK_MS = 60000;
+const codeFails = new Map();
+const CODE_MAX_FAILS = 10, CODE_LOCK_MS = 60000;
+const regHits = new Map();
+const REG_MAX = 5, REG_WINDOW_MS = 10 * 60000;
+function pruneRegHits(now) {
+  for (const [k, arr] of regHits) { const kept = arr.filter(t => now - t < REG_WINDOW_MS); if (kept.length) regHits.set(k, kept); else regHits.delete(k); }
+>>>>>>> 0f0b98ab84064e1e8f156b85d6a89aaee4fb66e2
 }
 const byId = (arr, id) => arr.find(x => x.id === id);
 function examStatus(ex) { if (ex.stoppedAt) return '已停止'; const n = Date.now(); if (n < Date.parse(ex.startTime)) return '未开始'; if (n > Date.parse(ex.endTime)) return '已结束'; return '进行中'; }
+function examClassNames(ex) { return Array.isArray(ex.classNames) ? ex.classNames : []; }
+function examAllowsStudent(ex, u) { const list = examClassNames(ex); return !list.length || list.includes(u.className); }
+function normClassNames(v) { const raw = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []); return [...new Set(raw.map(x => String(x).trim()).filter(Boolean))]; }
+function examScope(body) {
+  const classNames = normClassNames(body.classNames);
+  const unknown = classNames.filter(c => !(DB.classes || []).includes(c));
+  if (unknown.length) return { error: '以下班级不存在：' + unknown.join('、') };
+  return { classNames, accessCode: String(body.accessCode || '').trim().slice(0, 32) };
+}
 function publicUser(u) { return { id: u.id, username: u.username, name: u.name, role: u.role, className: u.className, status: u.status || 'active' }; }
 
 /* 练习会话：答题/判分只接受本次练习下发过的题目，避免按任意 qid 换取答案 */
@@ -644,6 +677,7 @@ async function api(req, res, url) {
 
   // 登录
   if (p === '/api/login' && method === 'POST') {
+<<<<<<< HEAD
     const username = String(body.username || '').trim();
     const key = loginKey(req, username);
     const locked = loginLockSeconds(key);
@@ -662,10 +696,29 @@ async function api(req, res, url) {
     const t = tokenOf(req);
     if (t) tokens.delete(t);
     return ok(res, { loggedOut: true });
+=======
+    const nowMs = Date.now();
+    pruneFailMap(loginFails, nowMs);
+    const uname = String(body.username || '');
+    const loginKey = (req.socket.remoteAddress || '') + '|' + uname;
+    const failRec = loginFails.get(loginKey);
+    if (failRec && failRec.lockedUntil > nowMs) return fail(res, 429, `登录失败次数过多，请 ${Math.ceil((failRec.lockedUntil - nowMs) / 1000)} 秒后再试`);
+    const u = DB.users.find(x => x.username === uname && x.password === hashPw(String(body.password || '')));
+    if (!u) { bumpFail(loginFails, loginKey, LOGIN_MAX_FAILS, LOGIN_LOCK_MS, nowMs); return fail(res, 401, '账号或密码不正确'); }
+    if (u.status === 'pending') return fail(res, 403, '账号正在等待管理员审核，审核通过后方可登录');
+    loginFails.delete(loginKey);
+    const token = crypto.randomBytes(24).toString('hex');
+    tokens.set(token, u.id);
+    return ok(res, { token, user: publicUser(u) });
+>>>>>>> 0f0b98ab84064e1e8f156b85d6a89aaee4fb66e2
   }
 
-  // 自助注册（学生注册即生效，教师注册需管理员审核）
+  // 自助注册（所有自助注册账号需管理员审核通过后才能登录）
   if (p === '/api/register' && method === 'POST') {
+    const regNow = Date.now();
+    const regIp = req.socket.remoteAddress || '';
+    pruneRegHits(regNow);
+    if ((regHits.get(regIp) || []).length >= REG_MAX) return fail(res, 429, '注册过于频繁，请 10 分钟后再试');
     const username = String(body.username || '').trim();
     const name = String(body.name || '').trim();
     const password = String(body.password || '');
@@ -673,8 +726,10 @@ async function api(req, res, url) {
     if (password.length < 6) return fail(res, 400, '密码至少 6 位');
     if (!['student', 'teacher'].includes(body.role)) return fail(res, 400, '只能注册学生或教师账号');
     if (DB.users.some(u => u.username === username)) return fail(res, 400, '该账号已被注册');
-    const u = { id: 'u' + (++DB.seq.user), username, password: hashPw(password), name, role: body.role, className: body.role === 'student' ? String(body.className || '').trim() : '', status: body.role === 'teacher' ? 'pending' : 'active', wrongDismissed: [] };
-    DB.users.push(u); saveDB();
+    const u = { id: 'u' + (++DB.seq.user), username, password: hashPw(password), name, role: body.role, className: body.role === 'student' ? String(body.className || '').trim() : '', status: 'pending', wrongDismissed: [] };
+    DB.users.push(u);
+    regHits.set(regIp, [...(regHits.get(regIp) || []), regNow]);
+    saveDB();
     return ok(res, { registered: username, status: u.status });
   }
   if (p === '/api/public/classes' && method === 'GET') return ok(res, DB.classes || []);
@@ -839,18 +894,20 @@ async function api(req, res, url) {
     if (me.role === 'teacher') {
       const archived = url.searchParams.get('archived') === '1';
       list = list.filter(e => e.createdBy === me.id && !!e.archivedAt === archived);
-    } else if (me.role === 'student') list = list.filter(e => !e.archivedAt);
+    } else if (me.role === 'student') list = list.filter(e => !e.archivedAt && examAllowsStudent(e, me));
     const data = list.map(e => {
       const sheets = DB.sheets.filter(s => s.examId === e.id);
       const sub = sheets.filter(s => s.status === 'submitted');
       const mine = me.role === 'student' ? sheets.find(s => s.studentId === me.id) : null;
-      return {
+      const item = {
         ...e, status: examStatus(e),
         joined: sheets.length, submitted: sub.length,
         avg: sub.length ? round1(sub.reduce((s, x) => s + x.score, 0) / sub.length) : null,
         pendingGrading: sheets.filter(s => s.status === 'submitted' && (s.pending || 0) > 0).length,
         mySheet: mine ? { id: mine.id, status: mine.status, score: mine.status === 'submitted' ? mine.score : null } : null
       };
+      if (me.role === 'student') { item.hasAccessCode = !!e.accessCode; delete item.accessCode; }
+      return item;
     });
     return ok(res, data);
   }
@@ -862,7 +919,9 @@ async function api(req, res, url) {
     const durationMin = body.durationMin === undefined ? 30 : Number(body.durationMin);
     if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) return fail(res, 400, '考试时间无效，结束时间必须晚于开始时间');
     if (!Number.isInteger(durationMin) || durationMin < 1) return fail(res, 400, '考试时长必须是正整数分钟');
-    const ex = { id: 'ex' + (++DB.seq.exam), name: body.name || '未命名考试', paperId: paper.id, createdBy: me.id, startTime: body.startTime, endTime: body.endTime, durationMin, switchLimit: Math.max(0, Number(body.switchLimit) || 0), showAnswer: !!body.showAnswer, note: body.note || '' };
+    const scope = examScope(body);
+    if (scope.error) return fail(res, 400, scope.error);
+    const ex = { id: 'ex' + (++DB.seq.exam), name: body.name || '未命名考试', paperId: paper.id, createdBy: me.id, startTime: body.startTime, endTime: body.endTime, durationMin, switchLimit: Math.max(0, Number(body.switchLimit) || 0), showAnswer: !!body.showAnswer, note: body.note || '', classNames: scope.classNames, accessCode: scope.accessCode };
     DB.exams.push(ex); saveDB();
     return ok(res, ex);
   }
@@ -878,7 +937,9 @@ async function api(req, res, url) {
     const durationMin = body.durationMin === undefined ? ex.durationMin : Number(body.durationMin);
     if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) return fail(res, 400, '考试时间无效，结束时间必须晚于开始时间');
     if (!Number.isInteger(durationMin) || durationMin < 1) return fail(res, 400, '考试时长必须是正整数分钟');
-    Object.assign(ex, { name: body.name || ex.name, paperId: paper.id, startTime: body.startTime, endTime: body.endTime, durationMin, switchLimit: Math.max(0, Number(body.switchLimit) || 0), showAnswer: !!body.showAnswer, note: body.note || '' });
+    const scope = examScope(body);
+    if (scope.error) return fail(res, 400, scope.error);
+    Object.assign(ex, { name: body.name || ex.name, paperId: paper.id, startTime: body.startTime, endTime: body.endTime, durationMin, switchLimit: Math.max(0, Number(body.switchLimit) || 0), showAnswer: !!body.showAnswer, note: body.note || '', classNames: scope.classNames, accessCode: scope.accessCode });
     saveDB(); return ok(res, ex);
   }
   if (exMatch && method === 'DELETE') {
@@ -986,7 +1047,7 @@ async function api(req, res, url) {
       return { student: u ? u.name : '?', username: u ? u.username : '', className: u ? u.className : '', status: s.status, answered: Object.values(s.answers || {}).filter(isAns).length, totalQ, switchCount: s.switchCount, startAt: s.startAt, submitAt: s.submitAt, score: s.status === 'submitted' ? s.score : null, pending: s.pending || 0 };
     }).sort((a, b) => (a.status === b.status ? 0 : a.status === 'answering' ? -1 : 1));
     const enteredIds = new Set(sheets.map(s => s.studentId));
-    const notEntered = DB.users.filter(u => u.role === 'student' && u.status !== 'pending' && !enteredIds.has(u.id)).map(u => ({ student: u.name, username: u.username, className: u.className }));
+    const notEntered = DB.users.filter(u => u.role === 'student' && u.status !== 'pending' && !enteredIds.has(u.id) && examAllowsStudent(ex, u)).map(u => ({ student: u.name, username: u.username, className: u.className }));
     return ok(res, { exam: { ...ex, status: examStatus(ex) }, totalQ, entered, notEntered, submitted: sheets.filter(s => s.status === 'submitted').length, answering: sheets.filter(s => s.status === 'answering').length });
   }
   const exportMatch = /^\/api\/exams\/(.+)\/export$/.exec(p);
@@ -998,7 +1059,7 @@ async function api(req, res, url) {
     const lines = ['学生,账号,班级,得分,批改状态,交卷时间,切屏次数,切屏提醒'];
     submitted.forEach((s, i) => {
       const u = byId(DB.users, s.studentId) || {};
-      lines.push([u.name || '', u.username || '', u.className || '', s.score, (s.pending || 0) > 0 ? '待批改（暂定分）' : '已完成', s.submitAt ? s.submitAt.replace('T', ' ').slice(0, 19) : '', s.switchCount, s.switchCount > 3 ? '超过3次' : ''].join(','));
+      lines.push([u.name || '', u.username || '', u.className || '', s.score, (s.pending || 0) > 0 ? '待批改（暂定分）' : '已完成', s.submitAt ? fmtLocal(s.submitAt) : '', s.switchCount, s.switchCount > 3 ? '超过3次' : ''].join(','));
     });
     res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="scores.csv"' });
     return res.end('\ufeff' + lines.join('\r\n'));
@@ -1010,6 +1071,7 @@ async function api(req, res, url) {
     if (!student()) return;
     const ex = byId(DB.exams, startMatch[1]);
     if (!ex) return fail(res, 404, '考试不存在');
+    if (!examAllowsStudent(ex, me)) return fail(res, 403, '你不在本场考试的参考范围内');
     if (ex.stoppedAt) return fail(res, 400, '考试已被教师停止');
     const st = examStatus(ex);
     if (st === '未开始') return fail(res, 400, '考试尚未开始');
@@ -1018,6 +1080,16 @@ async function api(req, res, url) {
     if (sheet && sheet.status === 'answering' && sheetExpired(ex, sheet)) await finalizeSheet(sheet, 'timeout');
     if (sheet && sheet.status === 'submitted') return fail(res, 400, '答卷已提交，请到成绩页查看');
     if (!sheet) {
+      const needCode = String(ex.accessCode || '').trim();
+      if (needCode) {
+        const codeNow = Date.now();
+        pruneFailMap(codeFails, codeNow);
+        const codeKey = me.id + '|' + ex.id;
+        const codeRec = codeFails.get(codeKey);
+        if (codeRec && codeRec.lockedUntil > codeNow) return fail(res, 429, `考试口令错误次数过多，请 ${Math.ceil((codeRec.lockedUntil - codeNow) / 1000)} 秒后再试`);
+        if (String(body.accessCode || '').trim() !== needCode) { bumpFail(codeFails, codeKey, CODE_MAX_FAILS, CODE_LOCK_MS, codeNow); return fail(res, 403, '考试口令不正确'); }
+        codeFails.delete(codeKey);
+      }
       sheet = { id: 'sh' + (++DB.seq.sheet), examId: ex.id, studentId: me.id, startAt: nowISO(), submitAt: null, answers: {}, marked: [], switchCount: 0, status: 'answering', score: 0, details: [] };
       DB.sheets.push(sheet); saveDB();
     }
