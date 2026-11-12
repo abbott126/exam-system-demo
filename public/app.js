@@ -1,5 +1,5 @@
 'use strict';
-/* 考试系统 v1.0 前端（单页应用） */
+/* 考试系统 v1.6 前端（单页应用） */
 const $app = document.getElementById('app');
 const $modal = document.getElementById('modal-root');
 const TYPE_NAME = { single: '单选', multi: '多选', judge: '判断', fill: '填空', essay: '简答', code: '编程' };
@@ -91,7 +91,7 @@ const AUTH_BRAND_HTML = `<aside class="auth-brand">
         <li><span class="auth-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg></span><div><strong>AI 辅助批改</strong><span>主观题给出建议评分与评语，教师确认后生效</span></div></li>
         <li><span class="auth-feature-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg></span><div><strong>数据洞察</strong><span>成绩分布、知识点掌握度与班级对比一目了然</span></div></li>
       </ul>
-      <div class="auth-brand-foot">v1.0 正式版 · 单机零依赖部署 · 断网可用</div>
+      <div class="auth-brand-foot">v1.6 · 单机零依赖部署 · 断网可用</div>
     </div>
   </aside>`;
 function renderLogin(err, prefillUser) {
@@ -175,7 +175,7 @@ function enterApp() {
   const navs = NAVS[S.user.role];
   S.view = navs[0][0];
   $app.innerHTML = `<div class="layout">
-    <aside class="sidebar"><div class="logo">考试系统 <span style="font-size:12px;color:#38bdf8;font-weight:400">v1.0</span></div>
+    <aside class="sidebar"><div class="logo">考试系统 <span style="font-size:12px;color:#38bdf8;font-weight:400">v1.6</span></div>
       <nav>${navs.map(n => `<button data-v="${n[0]}" class="${n[0] === S.view ? 'active' : ''}">${n[1]}</button>`).join('')}</nav>
       <div class="who" id="who-box">${whoHtml()}</div>
     </aside>
