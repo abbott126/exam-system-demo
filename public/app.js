@@ -1064,8 +1064,8 @@ async function viewUsers() {
   const roleName = { teacher: '教师', student: '学生', admin: '管理员' };
   const pending = users.filter(u => u.status === 'pending');
   const active = users.filter(u => u.status !== 'pending');
-  main().innerHTML = `<div class="row spread mb"><h2 style="margin:0">用户管理</h2><div class="row"><button class="btn ghost" id="u-import">批量导入学生</button><button class="btn" id="u-add">＋ 新增用户</button></div></div>${pending.length ? `<div class="card" style="border-color:var(--warn);background:#fffbeb"><strong>待审核注册（${pending.length}）</strong>${pending.map(u => `<div class="checkrow" style="margin-top:8px;background:#fff"><span style="flex:1">${esc(u.name)}（${esc(u.username)}）申请注册为${roleName[u.role]}${u.role === 'student' && u.className ? ' · 班级：' + esc(u.className) : ''}</span><button class="btn small" data-approve="${u.id}">通过</button><button class="btn ghost small" data-deluser="${u.id}">拒绝</button></div>`).join('')}</div>` : ''}<div class="card"><table><tr><th>账号</th><th>姓名</th><th>角色</th><th>班级</th><th>操作</th></tr>
-  ${active.map(u => `<tr><td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${roleName[u.role]}</td><td>${esc(u.className || '-')}</td>
+  main().innerHTML = `<div class="row spread mb"><h2 style="margin:0">用户管理</h2><div class="row"><button class="btn ghost" id="u-import">批量导入学生</button><button class="btn" id="u-add">＋ 新增用户</button><button class="btn ghost" id="u-delbulk">批量删除</button></div></div>${pending.length ? `<div class="card" style="border-color:var(--warn);background:#fffbeb"><strong>待审核注册（${pending.length}）</strong>${pending.map(u => `<div class="checkrow" style="margin-top:8px;background:#fff"><span style="flex:1">${esc(u.name)}（${esc(u.username)}）申请注册为${roleName[u.role]}${u.role === 'student' && u.className ? ' · 班级：' + esc(u.className) : ''}</span><button class="btn small" data-approve="${u.id}">通过</button><button class="btn ghost small" data-deluser="${u.id}">拒绝</button></div>`).join('')}</div>` : ''}  <div class="card"><table><tr><th>选择</th><th>账号</th><th>姓名</th><th>角色</th><th>班级</th><th>操作</th></tr>
+  ${active.map(u => `<tr><td><input type="checkbox" class="u-check" value="${u.id}" ${u.id === S.user.id ? 'disabled' : ''}></td><td>${esc(u.username)}</td><td>${esc(u.name)}</td><td>${roleName[u.role]}</td><td>${esc(u.className || '-')}</td>
   <td><button class="link" data-edituser="${u.id}">编辑</button>${u.role === 'student' ? `<button class="link" data-reset="${u.id}">重置密码</button>` : ''}${u.id !== S.user.id ? `<button class="link danger" data-deluser="${u.id}">删除</button>` : ''}</td></tr>`).join('')}</table>
   <p class="sub small mt">重置后密码为初始密码 123456。已有答卷记录的用户不能删除。批量导入的学生初始密码统一为 123456。自助注册的账号会出现在上方待审核区。</p></div>`;
   main().querySelectorAll('[data-approve]').forEach(b => b.onclick = async () => { try { await api('POST', `/api/admin/users/${b.dataset.approve}/approve`); toast('已通过审核'); viewUsers(); } catch (e) { toast(e.message, 'err'); } });
@@ -1073,6 +1073,15 @@ async function viewUsers() {
   main().querySelectorAll('[data-reset]').forEach(b => b.onclick = () => confirmBox('确定把该学生密码重置为 123456 吗？', async () => { await api('POST', `/api/admin/users/${b.dataset.reset}/reset`); toast('已重置'); }));
   main().querySelectorAll('[data-deluser]').forEach(b => b.onclick = () => confirmBox('确定删除该用户吗？此操作不可恢复。', async () => { try { await api('DELETE', `/api/admin/users/${b.dataset.deluser}`); toast('已删除'); viewUsers(); } catch (e) { toast(e.message, 'err'); } }));
   document.getElementById('u-add').onclick = () => userForm();
+  const delBulk = document.getElementById('u-delbulk');
+  delBulk.onclick = async () => {
+    const checks = [...main().querySelectorAll('.u-check:checked')].map(c => c.value);
+    if (!checks.length) return toast('请先勾选要删除的用户', 'err');
+    confirmBox('确定批量删除选中的用户吗？此操作不可恢复。', async () => {
+      try { const r = await api('DELETE', '/api/admin/users', { ids: checks }); toast('已删除 ' + (r && r.deleted ? r.deleted.length : checks.length) + ' 个用户'); viewUsers(); }
+      catch (e) { toast(e.message, 'err'); }
+    });
+  };
   document.getElementById('u-import').onclick = () => importStudentsModal();
 }
 function userEditForm(u) {

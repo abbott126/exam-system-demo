@@ -1517,6 +1517,24 @@ async function api(req, res, url) {
     saveDB();
     return ok(res, { created, skipped });
   }
+  if (p === '/api/admin/users' && method === 'DELETE') {
+    if (!admin()) return;
+    const ids = Array.isArray(body.ids) ? body.ids.map(x => String(x || '')).filter(Boolean) : [];
+    if (!ids.length) return fail(res, 400, 'ids 不能为空');
+    if (ids.length > 500) return fail(res, 400, '一次最多删除 500 个用户');
+    if (new Set(ids).size !== ids.length) return fail(res, 400, 'ids 不能重复');
+    const todo = [];
+    for (const id of ids) {
+      const u = byId(DB.users, id);
+      if (!u) return fail(res, 404, '用户不存在');
+      if (u.id === me.id) return fail(res, 400, '不能删除自己');
+      if (DB.sheets.some(s => s.studentId === u.id)) return fail(res, 400, '该用户已有答卷记录，不能删除');
+      todo.push({ id: u.id, username: u.username });
+    }
+    todo.forEach(t => { DB.users = DB.users.filter(x => x.id !== t.id); });
+    saveDB();
+    return ok(res, { deleted: todo.map(t => t.username) });
+  }
   const uDelMatch = /^\/api\/admin\/users\/(.+)$/.exec(p);
   if (uDelMatch && method === 'DELETE') {
     if (!admin()) return;
