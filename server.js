@@ -1577,4 +1577,4 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) fail(res, 500, '服务器内部错误');
   }
 });
-server.listen(PORT, () => console.log(`考试系统 v1.0 已启动 → http://localhost:${PORT} （教师 teacher / 学生 student / 管理员 admin，密码均为 123456）`));
+server.listen(PORT, () => console.log(`考试系统 v1.6 已启动 → http://localhost:${PORT} （教师 teacher / 学生 student / 管理员 admin，密码均为 123456）`));
