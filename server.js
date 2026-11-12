@@ -518,7 +518,6 @@ if (loadedDB) {
 if (!DB.settings) DB.settings = { ai: { enabled: false, baseUrl: '', apiKey: '', model: '' } };
 resetSheetExpiryTimers();
 
-<<<<<<< HEAD
 const TOKEN_TTL = 12 * 3600 * 1000;
 const LOGIN_WINDOW = 10 * 60 * 1000, LOGIN_MAX = 10, LOGIN_LOCK = 5 * 60 * 1000;
 const tokens = new Map(); // token -> { userId, expiresAt }
@@ -547,8 +546,7 @@ function noteLoginFailure(key) {
   if (a.count >= LOGIN_MAX) { a.lockedUntil = now + LOGIN_LOCK; a.count = 0; a.firstAt = now; }
   loginAttempts.set(key, a);
   if (loginAttempts.size > 5000) { for (const [k, v] of loginAttempts) if (!v.lockedUntil || v.lockedUntil < now) loginAttempts.delete(k); }
-=======
-const tokens = new Map(); // token -> userId
+}
 const FAIL_IDLE_MS = 10 * 60000;
 function pruneFailMap(map, now) {
   for (const [k, v] of map) if (v.lockedUntil <= now && now - v.last > FAIL_IDLE_MS) map.delete(k);
@@ -560,15 +558,12 @@ function bumpFail(map, key, max, lockMs, now) {
   if (r.count >= max) { r.lockedUntil = now + lockMs; r.count = 0; }
   map.set(key, r);
 }
-const loginFails = new Map();
-const LOGIN_MAX_FAILS = 5, LOGIN_LOCK_MS = 60000;
 const codeFails = new Map();
 const CODE_MAX_FAILS = 10, CODE_LOCK_MS = 60000;
 const regHits = new Map();
 const REG_MAX = 5, REG_WINDOW_MS = 10 * 60000;
 function pruneRegHits(now) {
   for (const [k, arr] of regHits) { const kept = arr.filter(t => now - t < REG_WINDOW_MS); if (kept.length) regHits.set(k, kept); else regHits.delete(k); }
->>>>>>> 0f0b98ab84064e1e8f156b85d6a89aaee4fb66e2
 }
 const byId = (arr, id) => arr.find(x => x.id === id);
 function examStatus(ex) { if (ex.stoppedAt) return '已停止'; const n = Date.now(); if (n < Date.parse(ex.startTime)) return '未开始'; if (n > Date.parse(ex.endTime)) return '已结束'; return '进行中'; }
@@ -706,7 +701,6 @@ async function api(req, res, url) {
 
   // 登录
   if (p === '/api/login' && method === 'POST') {
-<<<<<<< HEAD
     const username = String(body.username || '').trim();
     const key = loginKey(req, username);
     const locked = loginLockSeconds(key);
@@ -725,21 +719,6 @@ async function api(req, res, url) {
     const t = tokenOf(req);
     if (t) tokens.delete(t);
     return ok(res, { loggedOut: true });
-=======
-    const nowMs = Date.now();
-    pruneFailMap(loginFails, nowMs);
-    const uname = String(body.username || '');
-    const loginKey = (req.socket.remoteAddress || '') + '|' + uname;
-    const failRec = loginFails.get(loginKey);
-    if (failRec && failRec.lockedUntil > nowMs) return fail(res, 429, `登录失败次数过多，请 ${Math.ceil((failRec.lockedUntil - nowMs) / 1000)} 秒后再试`);
-    const u = DB.users.find(x => x.username === uname && x.password === hashPw(String(body.password || '')));
-    if (!u) { bumpFail(loginFails, loginKey, LOGIN_MAX_FAILS, LOGIN_LOCK_MS, nowMs); return fail(res, 401, '账号或密码不正确'); }
-    if (u.status === 'pending') return fail(res, 403, '账号正在等待管理员审核，审核通过后方可登录');
-    loginFails.delete(loginKey);
-    const token = crypto.randomBytes(24).toString('hex');
-    tokens.set(token, u.id);
-    return ok(res, { token, user: publicUser(u) });
->>>>>>> 0f0b98ab84064e1e8f156b85d6a89aaee4fb66e2
   }
 
   // 自助注册（所有自助注册账号需管理员审核通过后才能登录）
