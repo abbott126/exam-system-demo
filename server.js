@@ -1,19 +1,22 @@
 'use strict';
 /*
- * 考试系统 v1.0 正式版 —— 零依赖 Node.js 单体服务
- * 对应 PRD：《考试系统Demo-PRD.md》v1.0
+ * 考试系统 v1.6 —— 零依赖 Node.js 单体服务
+ * 对应 PRD：docs/考试系统Demo-PRD.md v1.6
  * 运行：node server.js  →  http://localhost:3000
- * 数据：data/db.json（首次启动自动生成演示数据）
+ * 数据：data/db.json（可用 DATA_DIR 覆盖；首次启动自动生成演示数据）
  */
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 
 const PORT = process.env.PORT || 3000;
 const ROOT = __dirname;
-const DB_PATH = path.join(ROOT, 'data', 'db.json');
+// DATA_DIR 可覆盖数据目录，供测试用临时目录隔离，避免污染 data/db.json
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
+const DB_PATH = path.join(DATA_DIR, 'db.json');
 const PUBLIC = path.join(ROOT, 'public');
 
 /* ---------------- 工具 ---------------- */
@@ -278,21 +281,47 @@ function gradeSheet(db, sheet) {
  * 学生代码在本机子进程中运行：JavaScript 用 node -e、Python 用 python3 -c，
  * 每条测试用例单独喂标准输入、单独限时 3 秒、输出限长，超时/报错计该用例不通过，
  * 得分 = 通过用例数 ÷ 总用例数 × 本题分值。
- * 注意：这是单机课堂演示用的轻量判题，未做系统级沙箱隔离，请勿在公网环境开放。 */
+ * 加固：清空继承的环境变量、切到系统临时目录运行、Node 限堆 128MB、Python 用隔离模式，
+ * 超时/超长输出时按进程组整体击杀，避免子进程残留。
+ * 注意：这是单机课堂演示用的轻量判题，未做系统级沙箱隔离（无 seccomp/namespace/容器），
+ * 请勿在公网环境开放；如需公网部署，请把判题进程放进独立容器或 nsjail/firejail。 */
 const JUDGE_TIMEOUT = 3000;
+const JUDGE_MAX_OUTPUT = 65536;
+const JUDGE_CWD = os.tmpdir();
+const JUDGE_ENV = {
+  PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+  HOME: JUDGE_CWD,
+  TMPDIR: JUDGE_CWD
+};
+function killJudge(child) {
+  if (!child) return;
+  try {
+    if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+    else child.kill('SIGKILL');
+  } catch (e) {
+    try { child.kill('SIGKILL'); } catch (e2) {}
+  }
+}
 function normOut(s) { return String(s === undefined || s === null ? '' : s).replace(/\r\n/g, '\n').split('\n').map(x => x.replace(/\s+$/g, '')).join('\n').trim(); }
 function runCase(lang, code, input) {
   return new Promise(resolve => {
     const cmd = lang === 'python' ? 'python3' : 'node';
-    const args = lang === 'python' ? ['-c', code] : ['-e', code];
+    const args = lang === 'python' ? ['-I', '-B', '-c', code] : ['--max-old-space-size=128', '-e', code];
     let child;
-    try { child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] }); }
+    try {
+      child = spawn(cmd, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: JUDGE_CWD,
+        env: JUDGE_ENV,
+        detached: process.platform !== 'win32'
+      });
+    }
     catch (e) { return resolve({ status: 'error', actual: '', ms: 0, err: String(e && e.message || e) }); }
     const t0 = Date.now();
     let out = '', err = '', done = false;
     const finish = r => { if (!done) { done = true; clearTimeout(timer); resolve(r); } };
-    const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch (e) {} finish({ status: 'timeout', actual: normOut(out), ms: Date.now() - t0 }); }, JUDGE_TIMEOUT);
-    child.stdout.on('data', d => { out += d; if (out.length > 65536) { try { child.kill('SIGKILL'); } catch (e) {} } });
+    const timer = setTimeout(() => { killJudge(child); finish({ status: 'timeout', actual: normOut(out), ms: Date.now() - t0 }); }, JUDGE_TIMEOUT);
+    child.stdout.on('data', d => { out += d; if (out.length > JUDGE_MAX_OUTPUT) { killJudge(child); } });
     child.stderr.on('data', d => { err += d; if (err.length > 16384) err = err.slice(0, 16384); });
     child.on('error', e => finish({ status: 'error', actual: '', ms: Date.now() - t0, err: String(e && e.message || e) }));
     child.on('close', code2 => {
