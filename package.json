@@ -5,7 +5,9 @@
   "description": "零依赖 Node.js 考试系统演示（单机离线可运行）",
   "scripts": {
     "start": "node server.js",
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs",
+    "backup": "node scripts/backup-db.js",
+    "export:questions": "node scripts/export-questions.js"
   },
   "engines": {
     "node": ">=18"
