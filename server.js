@@ -928,14 +928,28 @@ async function api(req, res, url) {
   }
   if (p === '/api/exams' && method === 'POST') {
     if (!teacher()) return;
-    const paper = byId(DB.papers, body.paperId);
-    if (!paper || paper.createdBy !== me.id) return fail(res, 400, '试卷不存在');
+    // 现场组卷：带 items 时先落一张新试卷，再让考试引用它（校验全部通过后才写库，避免留下空卷）
+    let inlineItems = null;
+    if (Array.isArray(body.items) && body.items.length) {
+      const norm = normalizePaperItems(body.items, me.id);
+      if (norm.error) return fail(res, 400, norm.error);
+      inlineItems = norm.items;
+    }
     const startAt = Date.parse(body.startTime), endAt = Date.parse(body.endTime);
     const durationMin = body.durationMin === undefined ? 30 : Number(body.durationMin);
     if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt <= startAt) return fail(res, 400, '考试时间无效，结束时间必须晚于开始时间');
     if (!Number.isInteger(durationMin) || durationMin < 1) return fail(res, 400, '考试时长必须是正整数分钟');
     const scope = examScope(body);
     if (scope.error) return fail(res, 400, scope.error);
+    let paper;
+    if (inlineItems) {
+      paper = { id: 'p' + (++DB.seq.paper), name: (body.paperName || (body.name || '未命名考试') + '（组卷）').slice(0, 80), subject: body.subject || 'Linux基础', createdBy: me.id, createdAt: nowISO(), items: inlineItems };
+      paper.total = round1(paper.items.reduce((s, it) => s + it.score, 0));
+      DB.papers.push(paper);
+    } else {
+      paper = byId(DB.papers, body.paperId);
+      if (!paper || paper.createdBy !== me.id) return fail(res, 400, '试卷不存在');
+    }
     const ex = { id: 'ex' + (++DB.seq.exam), name: body.name || '未命名考试', paperId: paper.id, createdBy: me.id, startTime: body.startTime, endTime: body.endTime, durationMin, switchLimit: Math.max(0, Number(body.switchLimit) || 0), showAnswer: !!body.showAnswer, note: body.note || '', classNames: scope.classNames, accessCode: scope.accessCode };
     DB.exams.push(ex); saveDB();
     return ok(res, ex);

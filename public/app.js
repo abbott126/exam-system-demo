@@ -406,37 +406,28 @@ async function viewPapers() {
   main().querySelectorAll('[data-printpaper]').forEach(b => b.onclick = async () => { if (!S.bank || !S.bank.length) { try { S.bank = await api('GET', '/api/questions'); } catch (e) { return toast(e.message, 'err'); } } printPaper(S.papers.find(x => x.id === b.dataset.printpaper)); });
   main().querySelectorAll('[data-delpaper]').forEach(b => b.onclick = () => confirmBox('确定删除这份试卷吗？', async () => { try { await api('DELETE', '/api/papers/' + b.dataset.delpaper); toast('已删除'); viewPapers(); } catch (e) { toast(e.message, 'err'); } }));
 }
-async function paperBuilder(existing) {
-  if (!S.questions.length) S.questions = await api('GET', '/api/questions');
-  const picked = []; // {q, score}
-  if (existing) (existing.items || []).forEach(it => { if (it.question) picked.push({ q: it.question, score: it.score }); });
-  openModal(`<h3>${existing ? '编辑试卷' : '新建试卷'}</h3>
-  <label style="display:block;margin-bottom:10px">试卷名称<input id="pb-name" style="width:100%;margin-top:5px" value="${esc(existing ? existing.name : 'Linux基础测验卷')}"></label>
-  <div class="row mb"><button class="btn small" id="pb-tab-manual">手动组卷</button><button class="btn ghost small" id="pb-tab-random">规则随机组卷</button></div>
-  <div id="pb-body"></div>
-  <div class="card" style="background:#f8fafc;margin-top:12px"><div class="row spread"><span>已选 <strong id="pb-count">0</strong> 题 · 总分 <strong id="pb-total">0</strong> 分</span>
-  <div class="row"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" id="pb-save">保存试卷</button></div></div>
-  <div id="pb-picked" class="mt"></div></div>`, true);
-  const body = document.getElementById('pb-body');
-  const refreshPicked = () => {
-    document.getElementById('pb-count').textContent = picked.length;
-    document.getElementById('pb-total').textContent = picked.reduce((s, x) => s + x.score, 0);
-    document.getElementById('pb-picked').innerHTML = picked.map((x, i) => `<div class="checkrow"><span style="flex:1"><strong>${i + 1}.</strong> <span class="tag">${TYPE_NAME[x.q.type]}</span> ${esc(x.q.stem)} <span class="tag gray">${x.q.difficulty}</span></span><input type="number" min="0.5" step="0.5" value="${x.score}" data-pscore="${i}"><button class="link" data-move="${i}|-1" title="上移">↑</button><button class="link" data-move="${i}|1" title="下移">↓</button><button class="link" data-replace="${i}">换一题</button><button class="link danger" data-remove="${i}">移除</button></div>`).join('');
-    document.querySelectorAll('[data-pscore]').forEach(inp => inp.onchange = () => { picked[Number(inp.dataset.pscore)].score = Number(inp.value) || 0; refreshPicked(); });
-    document.querySelectorAll('[data-move]').forEach(b => b.onclick = () => { const parts = b.dataset.move.split('|'); const i = Number(parts[0]), j = i + Number(parts[1]); if (j < 0 || j >= picked.length) return; const t = picked[i]; picked[i] = picked[j]; picked[j] = t; refreshPicked(); });
-    document.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => { picked.splice(Number(b.dataset.remove), 1); refreshPicked(); drawManual(); });
-    document.querySelectorAll('[data-replace]').forEach(b => b.onclick = async () => {
+/** 选题面板：手动勾选 + 规则随机抽题。bodyHost 放题型与抽题规则，pickedHost 放已选题目；picked 为 [{q, score}] */
+function mountPicker(bodyHost, pickedHost, picked, onChange) {
+  bodyHost.innerHTML = `<div class="row mb"><button class="btn small" data-tab="manual">手动组卷</button><button class="btn ghost small" data-tab="random">规则随机组卷</button></div><div class="pick-list"></div>`;
+  const listBox = bodyHost.querySelector('.pick-list');
+  function refreshPicked() {
+    pickedHost.innerHTML = picked.map((x, i) => `<div class="checkrow"><span style="flex:1"><strong>${i + 1}.</strong> <span class="tag">${TYPE_NAME[x.q.type]}</span> ${esc(x.q.stem)} <span class="tag gray">${x.q.difficulty}</span></span><input type="number" min="0.5" step="0.5" value="${x.score}" data-pscore="${i}"><button class="link" data-move="${i}|-1" title="上移">↑</button><button class="link" data-move="${i}|1" title="下移">↓</button><button class="link" data-replace="${i}">换一题</button><button class="link danger" data-remove="${i}">移除</button></div>`).join('');
+    pickedHost.querySelectorAll('[data-pscore]').forEach(inp => inp.onchange = () => { picked[Number(inp.dataset.pscore)].score = Number(inp.value) || 0; refreshPicked(); });
+    pickedHost.querySelectorAll('[data-move]').forEach(b => b.onclick = () => { const parts = b.dataset.move.split('|'); const i = Number(parts[0]), j = i + Number(parts[1]); if (j < 0 || j >= picked.length) return; const t = picked[i]; picked[i] = picked[j]; picked[j] = t; refreshPicked(); });
+    pickedHost.querySelectorAll('[data-remove]').forEach(b => b.onclick = () => { picked.splice(Number(b.dataset.remove), 1); refreshPicked(); drawManual(); });
+    pickedHost.querySelectorAll('[data-replace]').forEach(b => b.onclick = async () => {
       const i = Number(b.dataset.replace), cur = picked[i];
       try { const nq = await api('POST', '/api/papers/replace-one', { type: cur.q.type, difficulty: cur.q.difficulty, exclude: picked.map(x => x.q.id) }); picked[i] = { q: nq, score: cur.score }; refreshPicked(); drawManual(); toast('已替换'); }
       catch (e) { toast(e.message, 'err'); }
     });
-  };
-  const drawManual = () => {
-    body.innerHTML = `<div class="paper-pick">${S.questions.map(q => { const sel = picked.find(x => x.q.id === q.id); return `<div class="checkrow"><input type="checkbox" data-pick="${q.id}" ${sel ? 'checked' : ''}><span style="flex:1"><span class="tag">${TYPE_NAME[q.type]}</span> ${esc(q.stem)} <span class="tag gray">${q.difficulty}</span> <span class="sub small">${q.score} 分</span></span></div>`; }).join('') || '<div class="empty">题库为空。</div>'}</div>`;
-    body.querySelectorAll('[data-pick]').forEach(cb => cb.onchange = () => { const q = S.questions.find(x => x.id === cb.dataset.pick); if (cb.checked) picked.push({ q, score: q.score }); else { const i = picked.findIndex(x => x.q.id === q.id); if (i >= 0) picked.splice(i, 1); } refreshPicked(); });
-  };
-  const drawRandom = () => {
-    body.innerHTML = Object.entries(TYPE_NAME).map(([t, name]) => `<div class="row mb"><span style="width:52px"><strong>${name}</strong></span>${['易', '中', '难'].map(d => `<label class="sub small">${d} <input type="number" min="0" value="0" id="rr-${t}-${d}" style="width:60px"></label>`).join('')}<span class="sub small">题库现有：${['易', '中', '难'].map(d => d + ' ' + S.questions.filter(q => q.type === t && q.difficulty === d).length).join(' · ')}</span></div>`).join('') +
+    if (onChange) onChange();
+  }
+  function drawManual() {
+    listBox.innerHTML = `<div class="paper-pick">${S.questions.map(q => { const sel = picked.find(x => x.q.id === q.id); return `<div class="checkrow"><input type="checkbox" data-pick="${q.id}" ${sel ? 'checked' : ''}><span style="flex:1"><span class="tag">${TYPE_NAME[q.type]}</span> ${esc(q.stem)} <span class="tag gray">${q.difficulty}</span> <span class="sub small">${q.score} 分</span></span></div>`; }).join('') || '<div class="empty">题库为空。</div>'}</div>`;
+    listBox.querySelectorAll('[data-pick]').forEach(cb => cb.onchange = () => { const q = S.questions.find(x => x.id === cb.dataset.pick); if (cb.checked) picked.push({ q, score: q.score }); else { const i = picked.findIndex(x => x.q.id === q.id); if (i >= 0) picked.splice(i, 1); } refreshPicked(); });
+  }
+  function drawRandom() {
+    listBox.innerHTML = Object.entries(TYPE_NAME).map(([t, name]) => `<div class="row mb"><span style="width:52px"><strong>${name}</strong></span>${['易', '中', '难'].map(d => `<label class="sub small">${d} <input type="number" min="0" value="0" id="rr-${t}-${d}" style="width:60px"></label>`).join('')}<span class="sub small">题库现有：${['易', '中', '难'].map(d => d + ' ' + S.questions.filter(q => q.type === t && q.difficulty === d).length).join(' · ')}</span></div>`).join('') +
       `<button class="btn" id="rr-go">按规则随机抽题</button> <span class="sub small">抽题结果会填入下方已选区，可再逐题替换。</span>`;
     document.getElementById('rr-go').onclick = async () => {
       const rules = Object.keys(TYPE_NAME).map(t => ({ type: t, easy: Number(document.getElementById(`rr-${t}-易`).value) || 0, mid: Number(document.getElementById(`rr-${t}-中`).value) || 0, hard: Number(document.getElementById(`rr-${t}-难`).value) || 0 })).filter(r => r.easy + r.mid + r.hard > 0);
@@ -444,11 +435,28 @@ async function paperBuilder(existing) {
       try { const got = await api('POST', '/api/papers/random-preview', { rules }); picked.length = 0; got.forEach(q => picked.push({ q, score: q.score })); refreshPicked(); toast(`已抽中 ${got.length} 道题`); }
       catch (e) { toast(e.message, 'err'); }
     };
-  };
-  const tabM = document.getElementById('pb-tab-manual'), tabR = document.getElementById('pb-tab-random');
+  }
+  const tabM = bodyHost.querySelector('[data-tab=manual]'), tabR = bodyHost.querySelector('[data-tab=random]');
   tabM.onclick = () => { tabM.className = 'btn small'; tabR.className = 'btn ghost small'; drawManual(); };
   tabR.onclick = () => { tabR.className = 'btn small'; tabM.className = 'btn ghost small'; drawRandom(); };
   drawManual(); refreshPicked();
+  return { refreshPicked, drawManual };
+}
+
+async function paperBuilder(existing) {
+  if (!S.questions.length) S.questions = await api('GET', '/api/questions');
+  const picked = []; // {q, score}
+  if (existing) (existing.items || []).forEach(it => { if (it.question) picked.push({ q: it.question, score: it.score }); });
+  openModal(`<h3>${existing ? '编辑试卷' : '新建试卷'}</h3>
+  <label style="display:block;margin-bottom:10px">试卷名称<input id="pb-name" style="width:100%;margin-top:5px" value="${esc(existing ? existing.name : 'Linux基础测验卷')}"></label>
+  <div id="pb-body"></div>
+  <div class="card" style="background:#f8fafc;margin-top:12px"><div class="row spread"><span>已选 <strong id="pb-count">0</strong> 题 · 总分 <strong id="pb-total">0</strong> 分</span>
+  <div class="row"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" id="pb-save">保存试卷</button></div></div>
+  <div id="pb-picked" class="mt"></div></div>`, true);
+  mountPicker(document.getElementById('pb-body'), document.getElementById('pb-picked'), picked, () => {
+    document.getElementById('pb-count').textContent = picked.length;
+    document.getElementById('pb-total').textContent = picked.reduce((s, x) => s + x.score, 0);
+  });
   document.getElementById('pb-save').onclick = async () => {
     if (!picked.length) return toast('还没有选任何题目', 'warn');
     const payload = { name: document.getElementById('pb-name').value.trim() || '未命名试卷', subject: existing ? existing.subject : 'Linux基础', items: picked.map(x => ({ qid: x.q.id, score: x.score })) };
@@ -490,11 +498,13 @@ async function viewExams() {
   main().querySelectorAll('[data-dupexam]').forEach(b => b.onclick = async () => { try { const cp = await api('POST', '/api/exams/' + b.dataset.dupexam + '/duplicate'); toast(`已复制为「${cp.name}」，开考时间设为明天，可再编辑调整`); viewExams(); } catch (e) { toast(e.message, 'err'); } });
 }
 function examForm(exam) {
-  if (!S.papers.length) return toast('请先在“试卷管理”里建一份试卷', 'warn');
+  if (!S.papers.length && exam) return toast('请先在“试卷管理”里建一份试卷', 'warn');
   const start = new Date(); const end = new Date(Date.now() + 7 * 24 * 3600 * 1000);
+  const compose = { on: false, picked: [] };
   openModal(`<h3>${exam ? '编辑考试' : '发布考试'}</h3><div class="form-grid">
   <label>考试名称<input id="fe-name" value="${esc(exam ? exam.name : 'Linux基础随堂测验')}"></label>
-  <label>关联试卷<select id="fe-paper">${S.papers.map(pp => `<option value="${pp.id}" ${exam && exam.paperId === pp.id ? 'selected' : ''}>${esc(pp.name)}（${pp.items.length} 题 / ${pp.total} 分）</option>`).join('')}</select></label>
+  <div class="form-field"><div class="lbl">关联试卷</div><div class="row"><select id="fe-paper" style="flex:1">${S.papers.map(pp => `<option value="${pp.id}" ${exam && exam.paperId === pp.id ? 'selected' : ''}>${esc(pp.name)}（${pp.items.length} 题 / ${pp.total} 分）</option>`).join('')}</select>${exam ? '' : '<button class="btn small" id="fe-compose">＋ 现场组卷</button>'}</div></div>
+  <div id="fe-compose-box" class="mt"></div>
   <div class="row"><label style="flex:1">开始时间<input id="fe-start" type="datetime-local" value="${exam ? toLocal(exam.startTime) : toLocal(start)}"></label>
   <label style="flex:1">结束时间<input id="fe-end" type="datetime-local" value="${exam ? toLocal(exam.endTime) : toLocal(end)}"></label>
   <label style="flex:1">考试时长（分钟）<input id="fe-dur" type="number" min="1" value="${exam ? exam.durationMin : 30}"></label>
@@ -504,10 +514,58 @@ function examForm(exam) {
   <label style="color:var(--ink)"><input type="checkbox" id="fe-show" ${!exam || exam.showAnswer ? 'checked' : ''}> 交卷后向学生展示正确答案与解析</label>
   <label>考试说明<textarea id="fe-note" rows="2">${esc(exam ? (exam.note || '') : '闭卷答题，请独立完成。')}</textarea></label></div>
   <div class="row" style="justify-content:flex-end"><button class="btn ghost" onclick="closeModal()">取消</button><button class="btn" id="fe-save">${exam ? '保存修改' : '发布考试'}</button></div>`);
+
+  const paperSel = document.getElementById('fe-paper');
+  const composeBox = document.getElementById('fe-compose-box');
+  const composeBtn = document.getElementById('fe-compose');
+  const composeTotal = () => compose.picked.reduce((s, x) => s + x.score, 0);
+  const syncComposeOption = () => {
+    let opt = paperSel.querySelector('option[value="__compose__"]');
+    if (compose.on) {
+      if (!opt) { opt = document.createElement('option'); opt.value = '__compose__'; paperSel.prepend(opt); }
+      opt.textContent = `使用本次组卷（${compose.picked.length} 题 / ${composeTotal()} 分）`;
+      paperSel.value = '__compose__';
+    } else if (opt) opt.remove();
+  };
+  const closeCompose = () => {
+    compose.on = false; compose.picked.length = 0; composeBox.innerHTML = '';
+    if (composeBtn) { composeBtn.textContent = '＋ 现场组卷'; composeBtn.className = 'btn small'; }
+    syncComposeOption();
+  };
+  if (composeBtn) composeBtn.onclick = async () => {
+    if (compose.on) return closeCompose();
+    if (!S.questions.length) { try { S.questions = await api('GET', '/api/questions'); } catch (e) { return toast(e.message, 'err'); } }
+    compose.on = true;
+    composeBtn.textContent = '取消组卷'; composeBtn.className = 'btn ghost small';
+    composeBox.innerHTML = `<div class="card" style="background:#f8fafc"><div class="row spread"><span class="sub small">现场组卷：勾选题目或按题型 / 难度规则随机抽题，发布时自动保存为一张新试卷并用于本场考试</span><span class="sub small">已选 <strong id="fe-cp-count">0</strong> 题 · 总分 <strong id="fe-cp-total">0</strong> 分</span></div>
+      <div id="fe-cp-body"></div><div id="fe-cp-picked" class="mt"></div></div>`;
+    mountPicker(document.getElementById('fe-cp-body'), document.getElementById('fe-cp-picked'), compose.picked, () => {
+      document.getElementById('fe-cp-count').textContent = compose.picked.length;
+      document.getElementById('fe-cp-total').textContent = composeTotal();
+      syncComposeOption();
+    });
+    syncComposeOption();
+  };
+  paperSel.onchange = () => { if (compose.on && paperSel.value !== '__compose__') closeCompose(); };
+
   document.getElementById('fe-save').onclick = async () => {
-    const body = { name: document.getElementById('fe-name').value.trim(), paperId: document.getElementById('fe-paper').value, startTime: new Date(document.getElementById('fe-start').value).toISOString(), endTime: new Date(document.getElementById('fe-end').value).toISOString(), durationMin: Number(document.getElementById('fe-dur').value) || 30, switchLimit: Math.max(0, Number(document.getElementById('fe-limit').value) || 0), showAnswer: document.getElementById('fe-show').checked, note: document.getElementById('fe-note').value, classNames: [...document.querySelectorAll('.fe-class:checked')].map(x => x.value), accessCode: document.getElementById('fe-code').value.trim() };
+    const body = { name: document.getElementById('fe-name').value.trim(), startTime: new Date(document.getElementById('fe-start').value).toISOString(), endTime: new Date(document.getElementById('fe-end').value).toISOString(), durationMin: Number(document.getElementById('fe-dur').value) || 30, switchLimit: Math.max(0, Number(document.getElementById('fe-limit').value) || 0), showAnswer: document.getElementById('fe-show').checked, note: document.getElementById('fe-note').value, classNames: [...document.querySelectorAll('.fe-class:checked')].map(x => x.value), accessCode: document.getElementById('fe-code').value.trim() };
     if (!body.name) return toast('考试名称不能为空', 'err');
-    try { if (exam) { await api('PUT', '/api/exams/' + exam.id, body); toast('考试已更新'); } else { await api('POST', '/api/exams', body); toast('考试已发布'); } closeModal(); viewExams(); } catch (e) { toast(e.message, 'err'); }
+    const inline = paperSel.value === '__compose__';
+    if (inline) {
+      if (!compose.picked.length) return toast('还没有选任何题目', 'warn');
+      body.items = compose.picked.map(x => ({ qid: x.q.id, score: x.score }));
+      body.paperName = body.name + '（组卷）';
+    } else {
+      body.paperId = paperSel.value;
+      if (!body.paperId) return toast('请选择试卷，或点「＋ 现场组卷」现场组卷', 'warn');
+    }
+    try {
+      if (exam) { await api('PUT', '/api/exams/' + exam.id, body); toast('考试已更新'); }
+      else { await api('POST', '/api/exams', body); toast(inline ? `考试已发布，已自动保存试卷《${body.paperName}》` : '考试已发布'); }
+      if (inline) S.papers = [];
+      closeModal(); viewExams();
+    } catch (e) { toast(e.message, 'err'); }
   };
 }
 
