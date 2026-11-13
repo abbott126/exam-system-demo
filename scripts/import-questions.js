@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 'use strict';
 /*
- * 将桌面 Markdown 题库导入 data/db.json
+ * 将 Markdown 题库导入 data/db.json
  * 用法：node scripts/import-questions.js
+ *       QUESTIONS_SRC_DIR=/path/to/题库 node scripts/import-questions.js
  * 分值：单选 1 分、判断 1 分、简答 5 分（判断题未指定分值，与单选同为客观题取 1 分）
+ * 源文件默认取桌面，可用 QUESTIONS_SRC_DIR 指定其他目录（题库已移出桌面后必须指定）
  */
 const fs = require('fs');
 const path = require('path');
@@ -12,11 +14,24 @@ const ROOT = path.resolve(__dirname, '..');
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(ROOT, 'data');
 const DB_PATH = path.join(DATA_DIR, 'db.json');
 
-const SRC = {
-  judge: '/Users/abbott/Desktop/判断题100题.md',
-  single: '/Users/abbott/Desktop/单选题100题.md',
-  essay: '/Users/abbott/Desktop/简答题100题.md',
+const SRC_DIR = process.env.QUESTIONS_SRC_DIR
+  ? path.resolve(process.env.QUESTIONS_SRC_DIR)
+  : '/Users/abbott/Desktop';
+
+/** 同一题型兼容两种命名：原始桌面文件（xxx100题.md）与导出脚本产出（xxx.md） */
+const SRC_CANDIDATES = {
+  judge: ['判断题100题.md', '判断题.md'],
+  single: ['单选题100题.md', '单选题.md'],
+  essay: ['简答题100题.md', '简答题.md'],
 };
+
+function resolveSrc(type) {
+  for (const name of SRC_CANDIDATES[type]) {
+    const p = path.join(SRC_DIR, name);
+    if (fs.existsSync(p)) return p;
+  }
+  throw new Error('未找到' + type + '题源文件，已查找 ' + SRC_DIR + ' 下：' + SRC_CANDIDATES[type].join('、'));
+}
 
 const SCORE = { judge: 1, single: 1, essay: 5 };
 const DIFFICULTY = '中';
@@ -62,14 +77,16 @@ function parseJudge(md) {
     const stem = qm[2].trim();
     i++;
     let answerLine = '';
+    let analysisLine = '';
     while (i < lines.length && !/^\*\*\d+\./.test(lines[i].trim()) && !/^##\s/.test(lines[i])) {
       if (lines[i].includes('【答案】')) answerLine += (answerLine ? '\n' : '') + lines[i];
+      else if (lines[i].includes('【解析】')) analysisLine += (analysisLine ? '\n' : '') + lines[i].replace(/【解析】/g, '').trim();
       i++;
     }
     const am = /【答案】\s*([√×xX])\s*(?:　|\s)*(?:（(.+?)）)?/.exec(answerLine);
     if (!am) throw new Error('判断题缺少答案：' + stem.slice(0, 40));
     const answer = am[1] === '√' ? 'true' : 'false';
-    const analysis = (am[2] || '').trim();
+    const analysis = analysisLine.trim() || (am[2] || '').trim();
     items.push({ stem, answer, analysis, tag, srcNo: Number(qm[1]) });
   }
   return items;
@@ -118,15 +135,17 @@ function parseEssay(md) {
     const stem = qm[2].trim();
     i++;
     const answerParts = [];
+    const analysisParts = [];
     while (i < lines.length && !/^\*\*\d+\./.test(lines[i].trim()) && !/^##\s/.test(lines[i])) {
       const t = lines[i].trim();
-      if (t.startsWith('答：')) answerParts.push(t.replace(/^答：/, ''));
+      if (t.startsWith('【评分要点】')) analysisParts.push(t.slice('【评分要点】'.length).trim());
+      else if (t.startsWith('答：')) answerParts.push(t.replace(/^答：/, ''));
       else if (answerParts.length && t) answerParts.push(t);
       i++;
     }
     const answer = answerParts.join('\n').trim();
     if (!answer) throw new Error('简答题缺少参考答案：' + stem.slice(0, 40));
-    items.push({ stem, answer, analysis: '', tag, srcNo: Number(qm[1]) });
+    items.push({ stem, answer, analysis: analysisParts.join('\n').trim(), tag, srcNo: Number(qm[1]) });
   }
   return items;
 }
@@ -151,9 +170,9 @@ function saveDb(db) {
 }
 
 function main() {
-  const judges = parseJudge(readMd(SRC.judge));
-  const singles = parseSingle(readMd(SRC.single));
-  const essays = parseEssay(readMd(SRC.essay));
+  const judges = parseJudge(readMd(resolveSrc('judge')));
+  const singles = parseSingle(readMd(resolveSrc('single')));
+  const essays = parseEssay(readMd(resolveSrc('essay')));
   console.log('解析结果：判断 %d、单选 %d、简答 %d', judges.length, singles.length, essays.length);
 
   const db = loadDb();
@@ -162,12 +181,13 @@ function main() {
   let skipped = 0;
 
   const push = (type, o) => {
-    const key = type + '\u0000' + o.stem;
+    const stem = type === 'essay' ? '简答题：' + o.stem : o.stem;
+    const key = type + '\u0000' + stem;
     if (existing.has(key)) { skipped++; return; }
     const q = {
       id: 'q' + (++db.seq.question),
       type,
-      stem: o.stem,
+      stem,
       options: o.options || [],
       answer: o.answer,
       analysis: o.analysis || '',
@@ -177,7 +197,6 @@ function main() {
       subject: SUBJECT,
       createdBy: CREATED_BY,
     };
-    if (type === 'essay') q.stem = '简答题：' + o.stem;
     db.questions.push(q);
     existing.add(key);
     created++;
