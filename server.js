@@ -51,8 +51,22 @@ const nowISO = () => new Date().toISOString();
 const fmtLocal = iso => { const d = new Date(iso); if (Number.isNaN(d.getTime())) return ''; const p = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
 
 /* ---------------- 演示数据（种子） ---------------- */
+/** 题库快照（题库/全部题目.json，已纳入 git）：读不到时回退到内置的 24 道种子题 */
+function loadQuestionSnapshot() {
+  const p = path.join(ROOT, '题库', '全部题目.json');
+  try {
+    if (!fs.existsSync(p)) return null;
+    const snap = JSON.parse(fs.readFileSync(p, 'utf8'));
+    if (!snap || !Array.isArray(snap.questions) || !snap.questions.length) return null;
+    return snap.questions;
+  } catch (e) {
+    console.error('题库快照读取失败，回退到内置种子题：' + e.message);
+    return null;
+  }
+}
+
 function seed() {
-  const questions = [
+  const questions = loadQuestionSnapshot() || [
     // 单选 ×8（每题 5 分）
     { id: 'q1', type: 'single', stem: '在 Linux 中，查看当前目录下文件和目录列表最常用的命令是？', options: [{ k: 'A', t: 'ls' }, { k: 'B', t: 'pwd' }, { k: 'C', t: 'cd' }, { k: 'D', t: 'mkdir' }], answer: 'A', analysis: 'ls 列出目录内容；pwd 显示当前路径；cd 切换目录；mkdir 创建目录。', score: 5, difficulty: '易', tag: '命令行基础', subject: 'Linux基础', createdBy: 'u_teacher' },
     { id: 'q2', type: 'single', stem: '在 Shell 中，表示当前用户家目录的符号是？', options: [{ k: 'A', t: '$' }, { k: 'B', t: '~' }, { k: 'C', t: '@' }, { k: 'D', t: '#' }], answer: 'B', analysis: '~ 代表当前用户的家目录，如 /home/student。', score: 5, difficulty: '易', tag: '命令行基础', subject: 'Linux基础', createdBy: 'u_teacher' },
@@ -94,29 +108,33 @@ function seed() {
     users.push({ id: 'u_stu' + i, username: 'stu' + String(i).padStart(2, '0'), password: hashPw('123456'), name: '学生' + String(i).padStart(2, '0'), role: 'student', className: i % 2 ? '计算机1班' : '计算机2班' });
   }
 
+  const qmap = Object.fromEntries(questions.map(q => [q.id, q]));
+  const objectiveQs = questions.filter(q => q.type !== 'essay' && q.type !== 'code');
+  const essayQs = questions.filter(q => q.type === 'essay');
+
   const paper = {
-    id: 'p_demo', name: 'Linux基础演示试卷', subject: 'Linux基础', createdBy: 'u_teacher', createdAt: nowISO(),
-    items: questions.filter(q => q.type !== 'essay' && q.type !== 'code').map(q => ({ qid: q.id, score: q.score }))
+    id: 'p_demo', name: 'Linux基础客观题卷（' + objectiveQs.length + ' 题）', subject: 'Linux基础', createdBy: 'u_teacher', createdAt: nowISO(),
+    items: objectiveQs.map(q => ({ qid: q.id, score: q.score }))
   };
   paper.total = paper.items.reduce((s, it) => s + it.score, 0);
 
   const dayMs = 24 * 3600 * 1000;
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const exam = {
-    id: 'ex_demo', name: 'Linux基础随堂测验（演示）', paperId: paper.id, createdBy: 'u_teacher',
+    id: 'ex_demo', name: 'Linux基础客观题测验（演示）', paperId: paper.id, createdBy: 'u_teacher',
     startTime: new Date(start.getTime()).toISOString(), endTime: new Date(start.getTime() + 30 * dayMs).toISOString(),
-    durationMin: 30, showAnswer: true, note: '演示考试：共 20 题，满分 100 分，交卷后立即出分。'
+    durationMin: 60, showAnswer: true, note: '客观题卷：共 ' + objectiveQs.length + ' 题，满分 ' + paper.total + ' 分，交卷后立即出分。'
   };
 
   const paper2 = {
-    id: 'p_comp', name: 'Linux基础综合卷（含主观题）', subject: 'Linux基础', createdBy: 'u_teacher', createdAt: nowISO(),
-    items: [...paper.items, { qid: 'q21', score: 10 }, { qid: 'q22', score: 10 }]
+    id: 'p_comp', name: 'Linux基础主观题卷（' + essayQs.length + ' 题）', subject: 'Linux基础', createdBy: 'u_teacher', createdAt: nowISO(),
+    items: essayQs.map(q => ({ qid: q.id, score: q.score }))
   };
   paper2.total = paper2.items.reduce((s, it) => s + it.score, 0);
   const exam2 = {
-    id: 'ex_comp', name: 'Linux基础综合测验（主观题演示）', paperId: paper2.id, createdBy: 'u_teacher',
+    id: 'ex_comp', name: 'Linux基础主观题测验（演示）', paperId: paper2.id, createdBy: 'u_teacher',
     startTime: new Date(start.getTime() - dayMs).toISOString(), endTime: new Date(start.getTime() + 30 * dayMs).toISOString(),
-    durationMin: 60, showAnswer: true, note: '含 2 道简答题，交卷后由教师批改，主观题分数以批改后为准。'
+    durationMin: 90, showAnswer: true, note: '主观题卷：共 ' + essayQs.length + ' 道简答题，交卷后由教师批改，主观题分数以批改后为准。'
   };
 
   const paper3 = {
@@ -131,20 +149,19 @@ function seed() {
   };
 
   const db = {
-    seq: { question: 24, paper: 3, exam: 3, sheet: 0, user: 33 },
+    seq: { question: questions.length, paper: 3, exam: 3, sheet: 0, user: 33 },
     classes: ['计算机1班', '计算机2班'],
     settings: { ai: { enabled: false, baseUrl: '', apiKey: '', model: '' } },
     users, questions, papers: [paper, paper2, paper3], exams: [exam, exam2, exam3], sheets: []
   };
 
-  // 30 条模拟答卷（确定性伪随机，保证统计页有真实感）
-  const qmap = Object.fromEntries(questions.map(q => [q.id, q]));
-  for (let i = 1; i <= 30; i++) {
-    const rnd = lcg(1000 + i * 77);
-    const ability = 0.35 + ((i * 29) % 58) / 100; // 0.35 ~ 0.92
+  // 模拟答卷（确定性伪随机，保证统计页有真实感）：客观题卷 30 份、主观题卷 8 份、编程卷 6 份
+  function mockAnswers(items, rnd, ability) {
     const answers = {};
-    for (const q of questions) {
-      if (q.type === 'essay') continue;
+    for (const it of items) {
+      const q = qmap[it.qid];
+      if (!q) continue;
+      if (q.type === 'essay') { answers[q.id] = '（学生作答：结合题干分点说明，给出操作步骤与结论）'; continue; }
       if (rnd() < ability) { answers[q.id] = Array.isArray(q.answer) ? [...q.answer] : q.answer; continue; }
       if (q.type === 'single') {
         const wrong = q.options.map(o => o.k).filter(k => k !== q.answer);
@@ -158,6 +175,13 @@ function seed() {
         answers[q.id] = [['cat'], ['vim'], ['top'], ['ls']][Math.floor(rnd() * 4)];
       }
     }
+    return answers;
+  }
+
+  for (let i = 1; i <= 30; i++) {
+    const rnd = lcg(1000 + i * 77);
+    const ability = 0.35 + ((i * 29) % 58) / 100; // 0.35 ~ 0.92
+    const answers = mockAnswers(paper.items, rnd, ability);
     const submitAt = Date.now() - (31 - i) * 47 * 60 * 1000;
     const startAt = submitAt - (16 + (i % 12)) * 60 * 1000;
     const sheet = {
@@ -170,33 +194,17 @@ function seed() {
     db.sheets.push(sheet);
   }
 
-  // 综合卷模拟答卷：8 份（学生01~08），前 5 份主观题已批改，后 3 份待批改，供批改功能演示
-  const essayPool = [
-    { a21: '7 表示可读、可写、可执行，三个数字分别是所有者、所属组和其他人的权限。生产上慎用是因为任何人都能改文件，容易被篡改或误删，应按最小权限原则授权。', a22: '先 df -h 看哪个分区满，再用 du 逐层找大目录；日志先轮转再清理，临时文件删除，业务数据考虑扩容或归档；最后复查使用率，并加容量预测监控。', s21: 9, s22: 9, c: '要点完整，表述清楚。' },
-    { a21: '777 就是所有人都有读、写、执行权限。危险在于不安全，别人可以随便改我的文件。', a22: '用 df 看是哪个分区，再 du 找大文件，把占地方的日志清掉。', s21: 6, s22: 5, c: '基本思路对，但处置分类和复查预防写得不完整。' },
-    { a21: 'chmod 777 就是开放全部权限，图省事。', a22: '把最大的文件删掉就行了。', s21: 3, s22: 2, c: '过于简略：未答到权限构成与具体风险，处置缺少分类与复查。' }
+  // 主观题卷模拟答卷：8 份（学生01~08），前 5 份主观题已批改，后 3 份待批改，供批改功能演示
+  const essayTiers = [
+    { ratio: 0.8, c: '要点完整，表述清楚。' },
+    { ratio: 0.6, c: '基本思路正确，但要点覆盖不全。' },
+    { ratio: 0.4, c: '过于简略，关键步骤缺失。' }
   ];
   for (let i = 1; i <= 8; i++) {
     const rnd = lcg(5000 + i * 131);
     const ability = 0.4 + ((i * 17) % 50) / 100;
-    const answers = {};
-    for (const q of questions) {
-      if (q.type === 'essay') continue;
-      if (rnd() < ability) { answers[q.id] = Array.isArray(q.answer) ? [...q.answer] : q.answer; continue; }
-      if (q.type === 'single') {
-        const wrong = q.options.map(o => o.k).filter(k => k !== q.answer);
-        answers[q.id] = wrong[Math.floor(rnd() * wrong.length)];
-      } else if (q.type === 'multi') {
-        if (rnd() < 0.5 && q.answer.length > 1) answers[q.id] = q.answer.slice(0, q.answer.length - 1);
-        else { const extra = q.options.map(o => o.k).find(k => !q.answer.includes(k)); answers[q.id] = extra ? [...q.answer, extra] : [...q.answer]; }
-      } else if (q.type === 'judge') {
-        answers[q.id] = q.answer === 'true' ? 'false' : 'true';
-      } else {
-        answers[q.id] = [['cat'], ['vim'], ['top'], ['ls']][Math.floor(rnd() * 4)];
-      }
-    }
-    const tier = essayPool[i % 3];
-    answers.q21 = tier.a21; answers.q22 = tier.a22;
+    const answers = mockAnswers(paper2.items, rnd, ability);
+    const tier = essayTiers[i % 3];
     const submitAt = Date.now() - (9 - i) * 31 * 60 * 1000;
     const startAt = submitAt - (35 + (i % 15)) * 60 * 1000;
     const sheet = {
@@ -208,8 +216,7 @@ function seed() {
     gradeSheet(db, sheet);
     if (i <= 5) { // 已批改：写入主观题得分与评语
       sheet.details.forEach(d => {
-        if (d.qid === 'q21') { d.score = tier.s21; d.correct = d.score === d.full; d.comment = tier.c; }
-        if (d.qid === 'q22') { d.score = tier.s22; d.correct = d.score === d.full; d.comment = tier.c; }
+        if (d.score === null) { d.score = round1(d.full * tier.ratio); d.correct = d.score === d.full; d.comment = tier.c; }
       });
       sheet.score = round1(sheet.details.reduce((s, d) => s + (d.score || 0), 0));
       sheet.pending = 0;
